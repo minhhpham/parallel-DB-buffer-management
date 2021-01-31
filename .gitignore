@@ -1,0 +1,5 @@
+*.o
+unitTestLinkedList
+unitTestRandomWalk
+unitTestClusteredRandomWalk
+out
