@@ -1,6 +1,7 @@
+MAKEFLAGS += -j9
 NVCC=		nvcc
 NVCC_OPTIM_FLAGS= -Xptxas -O4 -Xcompiler -O4 --device-c -arch=sm_70
-NVCC_DEBUG_FLAGS= -g -G -O0 --device-c -arch=sm_70
+NVCC_DEBUG_FLAGS= -g -G -O2 --device-c -arch=sm_70
 ifeq ($(debug), 1)
 	NVCC_FLAGS = $(NVCC_DEBUG_FLAGS)
 else

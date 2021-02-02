@@ -1,10 +1,18 @@
 #include "parallelPage.cuh"
 #include <curand_kernel.h>
 
+#define GROUP_N_PAGES 100000   // group pages for faster initialization
+
 /* actual pages for all strategies */
-__device__ void *d_pages;					// actual address to pages
+__device__ void **d_page_groups;                                       // actual address to pages, (TOTAL_N_PAGES/GROUP_N_PAGES) groups, each with GROUP_N_PAGES pages
 __device__ void *pageAddress(int pageID){
-	return (void*)((char*)d_pages + pageID*PAGE_SIZE);
+	// find group id
+	int groupID = pageID/GROUP_N_PAGES;
+	// find offset on group
+	int offset = pageID - groupID*GROUP_N_PAGES;
+	// calculate actual address
+	void *groupAddr = d_page_groups[groupID];
+	return (void*)((char*)groupAddr + offset*PAGE_SIZE);
 }
 
 
@@ -27,14 +35,34 @@ static __device__ int d_lockHeadNode;	// 0 means free
 static __device__ Node_t *d_TailNode;	// pointer to last free node
 static __device__ int d_lockTailNode;	// 0 means free
 
+/* actual page initialization on GPU */
+__host__ void initPages(){
+	int n_groups = ceil((float)TOTAL_N_PAGES/GROUP_N_PAGES);
+	printf("initializing %d groups on GPU, each with %d pages. Total = %ld MB \n", n_groups, GROUP_N_PAGES, (long)n_groups*GROUP_N_PAGES*PAGE_SIZE/1048576);
+	// initialize (TOTAL_N_PAGES/GROUP_N_PAGES) groups on GPU memory, save their pointers on a host array
+	void **h_groups = (void**)malloc(n_groups*sizeof(void*));
+	for (int i=0; i<n_groups; i++){ // allocate each group
+		gpuErrchk( cudaMalloc((void**)&h_groups[i], GROUP_N_PAGES*PAGE_SIZE) );
+	}
+	// allocate an array for d_pages and transfer the array of group pointers to this array
+	void* tmp;
+	cudaMalloc(&tmp, n_groups*sizeof(void*));
+	gpuErrchk( cudaMemcpy(tmp, h_groups, n_groups*sizeof(void*), cudaMemcpyHostToDevice) );
+
+	// set d_pages to this array
+	gpuErrchk( cudaMemcpyToSymbol(d_page_groups, &tmp, sizeof(void*)) );
+
+	// end
+	free(h_groups);
+}
+
+
 /* RANDOM WALK IMPLEMENTATION */
 /* initialize TOTAL_N_PAGES pages on GPU's global memory, each page is PAGE_SIZE large
 also initialize the page map structure with all 0 (all free) */
 __host__ void initPagesRandomWalk(){
-	// initialize pages, allocate a big chunk for all pages
-	void *h_pages;
-	gpuErrchk( cudaMalloc((void**)&h_pages, (size_t)TOTAL_N_PAGES*PAGE_SIZE) );
-	gpuErrchk( cudaMemcpyToSymbol(d_pages, &h_pages, sizeof(void*)) );
+	// initialize actual pages
+	initPages();
 
 	// initialize page map
 	void *h_PageMapRandomWalk;
@@ -74,7 +102,7 @@ __global__ void printNumPagesLeftRandomWalk_kernel(){
 	for (int i=0; i<TOTAL_N_PAGES; i++){
 		if (d_PageMapRandomWalk[i]==0) count++;
 	}
-	printf("Number of free pages: %d \n", count);
+	printf("[RW info] Number of free pages: %d \n", count);
 }
 
 __host__ void printNumPagesLeftRandomWalk(){
@@ -107,6 +135,7 @@ __device__ int getPageClusteredRandomWalk(int *stepCount){
 	int pageID = d_LastFreePage[tid];
 	if (pageID!=-1){
 		pageID++;
+		if (pageID==TOTAL_N_PAGES) pageID = 0;
 		if (d_PageMapRandomWalk[pageID]==0){
 			if (atomicExch(&d_PageMapRandomWalk[pageID],1) == 0){	// success
 				if (stepCount) *stepCount = 1;
@@ -156,10 +185,8 @@ __global__ void initPagesLinkedList_kernel(){
 }
 
 __host__ void initPagesLinkedList(){
-	// initialize pages, allocate a big chunk for all pages
-	void *h_pages;
-	gpuErrchk( cudaMalloc((void**)&h_pages, (size_t)TOTAL_N_PAGES*PAGE_SIZE) );
-	gpuErrchk( cudaMemcpyToSymbol(d_pages, &h_pages, sizeof(void*)) );
+	// initialize pages
+	initPages();
 
 	// initialize linked list 
 	Node_t *h_d_nodes;	// allocate nodes array and get pointer value on host, then copy this value to d_nodes
@@ -234,14 +261,14 @@ __global__ void printNumPagesLeftLinkedList_kernel(){
 	Node_t *node = d_HeadNode;
 	int count = 0;
 	if (node == 0){
-		printf("no free page\n");
+		printf("[LL info] no free page\n");
 		return;
 	}
 	while (node){
 		count++;
 		node = node->nextNode;
 	}
-	printf("Number of pages in linked list: %d, start=%d, end=%d \n", count, d_HeadNode->pageID, d_TailNode->pageID);
+	printf("[LL info] Number of pages in linked list: %d, start=%d, end=%d \n", count, d_HeadNode->pageID, d_TailNode->pageID);
 }
 
 __host__ void printNumPagesLeftLinkedList(){

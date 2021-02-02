@@ -1,15 +1,24 @@
 #include "parallelPage.cuh"
 #include "metrics.h"
 
+static __device__ void fillPage(void *page){
+	char *ptr = (char*)page;
+	for (int i=0; i<PAGE_SIZE; i++)
+		ptr[i] = 1;
+}
+
 /* Kernel to get 1 page with Random Walk, record step counts */
 __global__ void LinkedList_get1page_kernel(int Nthreads, int *d_step_counts){
 	int tid = blockIdx.x*blockDim.x + threadIdx.x;
 	if (tid<Nthreads){
 		int step_counts;
 		int pageID = getPageLinkedList(&step_counts);
-		freePageLinkedList(pageID);
-		pageID = getPageLinkedList(&step_counts);
-		d_step_counts[tid] = step_counts;
+		// freePageLinkedList(pageID);
+		// pageID = getPageLinkedList(&step_counts);
+		// d_step_counts[tid] = step_counts;
+		// mem check
+		void *page = pageAddress(pageID);
+		fillPage(page);
 	}
 }
 
