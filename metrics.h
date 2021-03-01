@@ -5,8 +5,9 @@ typedef struct
 	float runTime;	// in ms
 } Metrics_t;
 
-/* step_counts; array of step counts for eac thread */
+/* step_counts; array of step counts for each thread */
 static inline Metrics_t aggregate_metrics(int *step_counts, int Nthreads){
+	// for (int i=0; i<Nthreads; i++) printf("%d, %d\n", i, step_counts[i]);
 	Metrics_t out;
 	// calculate avg of step counts 
 	unsigned long Sum_Step = 0;

@@ -12,13 +12,12 @@ __global__ void RandomWalk_get1page_kernel(int Nthreads, int *d_step_counts){
 	int tid = blockIdx.x*blockDim.x + threadIdx.x;
 	if (tid<Nthreads){
 		int step_counts;
-		int pageID = getPageRandomWalk(&step_counts);
-		freePageRandomWalk(pageID);
-		pageID = getPageRandomWalk(&step_counts);
-		d_step_counts[tid] = step_counts;
+		int *tmp = d_step_counts? &step_counts : 0;
+		int pageID = getPageRandomWalk(tmp);
+		if (d_step_counts) d_step_counts[tid] = step_counts;
 		// mem check
-		void *page = pageAddress(pageID);
-		fillPage(page);
+		// void *page = pageAddress(pageID);
+		// fillPage(page);
 	}
 }
 
@@ -29,13 +28,30 @@ __global__ void RandomWalk_get1page_kernel(int Nthreads, int *d_step_counts){
 			*avgMaxWarp:	average of Max of Warp across all warps
 			*runTime:		total run time (s)
  */
-Metrics_t runRandomWalk(int Nthreads){
+Metrics_t runRandomWalk(int Nthreads, int NFree){
 	// allocate metrics array on host
-	int *h_step_counts = (int*)malloc(Nthreads*sizeof(int));
+	int *h_step_counts = (int*)malloc(10000*sizeof(int));
 	// allocate metrics array on gpu
 	int *d_step_counts;
-	gpuErrchk( cudaMalloc((void**)&d_step_counts, Nthreads*sizeof(int)) );
+	gpuErrchk( cudaMalloc((void**)&d_step_counts, 10000*sizeof(int)) );
 
+	// run kernel until get to NFree
+	resetBufferRandomWalk();
+	// printNumPagesLeftRandomWalk();
+	int NGets = TOTAL_N_PAGES - NFree;
+	for (int i=0; i<(NGets/5000); i++){
+		RandomWalk_get1page_kernel <<< ceil((float)5000/32), 32 >>> (5000, 0);
+		gpuErrchk( cudaPeekAtLastError() );
+		gpuErrchk( cudaDeviceSynchronize() );
+	}
+
+	for (int i=0; i<(NGets-(NGets/5000)*5000)/1000; i++){
+		RandomWalk_get1page_kernel <<< ceil((float)1000/32), 32 >>> (1000, 0);
+		gpuErrchk( cudaPeekAtLastError() );
+		gpuErrchk( cudaDeviceSynchronize() );
+	}
+
+	// printNumPagesLeftRandomWalk();
 	// execute kernel;
 	cudaEvent_t start, stop;
 	cudaEventCreate(&start);
@@ -50,7 +66,6 @@ Metrics_t runRandomWalk(int Nthreads){
 	cudaEventElapsedTime(&total_time, start, stop);
 	cudaEventDestroy(start);
 	cudaEventDestroy(stop);
-	printNumPagesLeftRandomWalk();
 
 	// copy metrics to host
 	gpuErrchk( cudaMemcpy(h_step_counts, d_step_counts, Nthreads*sizeof(int), cudaMemcpyDeviceToHost) );
@@ -97,14 +112,14 @@ int main(int argc, char const *argv[])
 
 	/* repeat getpage with Random Walk */
 	fprintf(stderr, "unit test with Total Pages = %d, Nthreads = %d ...\n", TOTAL_N_PAGES, Nthreads);
-	int AvailablePages = TOTAL_N_PAGES;
+	int AvailablePages = 7000;
 	printf("T,N,A,Average_steps,Average_Max_Warp,Time(ms)\n");
-	for (int i=0; i<TOTAL_N_PAGES/Nthreads; i++){
+	for (Nthreads=1; Nthreads<5000; Nthreads+=50){
 		// run kernel to get 1 page for each thread
-		Metrics_t metrics = runRandomWalk(Nthreads);
+		Metrics_t metrics = runRandomWalk(Nthreads, AvailablePages);
 		// print results to stdout
 		printf("%d,%d,%d,%f,%f,%f\n", TOTAL_N_PAGES, Nthreads, AvailablePages, metrics.avgStep, metrics.avgMaxWarp, metrics.runTime);
-		AvailablePages-=Nthreads;
+		// AvailablePages-=Nthreads;
 	}	
 
 	return 0;

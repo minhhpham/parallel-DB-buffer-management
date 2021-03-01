@@ -1,5 +1,7 @@
 #include "parallelPage.cuh"
-#include <curand_kernel.h>
+#include <stdint.h>
+#include <cooperative_groups.h>
+namespace cg = cooperative_groups;
 
 #define GROUP_N_PAGES 100000   // group pages for faster initialization
 
@@ -30,10 +32,15 @@ typedef struct Node_t
 	Node_t *nextNode;	// null if none
 } Node_t;
 static __device__ Node_t *d_nodes;		// pre-allocated nodes
-static __device__ Node_t *d_HeadNode;	// pointer to first free node
-static __device__ int d_lockHeadNode;	// 0 means free
-static __device__ Node_t *d_TailNode;	// pointer to last free node
-static __device__ int d_lockTailNode;	// 0 means free
+volatile static __device__ int d_HeadNodeID;		// index of headnode on d_nodes, -1 if it's not yet returned by a thread, -2 if no free page
+volatile static __device__ int d_TailNodeID;		// index of tailnode on d_nodes, -1 if it's not yet returned by a thread
+
+static __device__ long long unsigned d_LLticket;
+static __device__ long long unsigned d_LLturn;
+// static __device__ Node_t *d_HeadNode;	// pointer to first free node
+// static __device__ int d_lockHeadNode;	// 0 means free
+// static __device__ Node_t *d_TailNode;	// pointer to last free node
+// static __device__ int d_lockTailNode;	// 0 means free
 
 /* actual page initialization on GPU */
 __host__ void initPages(){
@@ -72,30 +79,49 @@ __host__ void initPagesRandomWalk(){
 }
 
 
+/* function to replace curand, better efficiency */
+#define LCG_M 1<<31
+#define LCG_A 1103515245
+#define LCG_C 12345
+__device__ static inline int RNG_LCG(int seed){
+    long long seed_ = (long long)seed;
+    return (int)((LCG_A*seed_ + LCG_C)%(LCG_M));
+}
+
 // if step_count is not null, write step count to it
 __device__ int getPageRandomWalk(int *stepCount){
-	curandState_t state;
 	int tid = blockIdx.x*blockDim.x + threadIdx.x;
-	curand_init(clock(), // seed
-			  tid,	// sequence number
-			  0,	// offset
-			  &state);
+	int16_t Clock = (int16_t)clock();
+	int seed = (tid<<15) + Clock;
+	seed = RNG_LCG(seed);
 	// randomize pages and try
-	int pageID = curand(&state) % TOTAL_N_PAGES;
+	int pageID = seed % TOTAL_N_PAGES;
 	if (pageID<0) pageID = -pageID;
 	int step_count = 1;
 	while(atomicExch(&d_PageMapRandomWalk[pageID],1) == 1){
-		pageID = curand(&state) % TOTAL_N_PAGES;
+		seed = RNG_LCG(seed);
+		pageID = seed % TOTAL_N_PAGES;
 		step_count++;
 	}
 	if (stepCount) *stepCount = step_count;
 	return pageID;
 }
 
+
 __device__ void freePageRandomWalk(int pageID){
 	atomicExch(&d_PageMapRandomWalk[pageID], 0);
 }
 
+
+__global__ void resetBufferRandomWalk_kernel(){
+	memset(d_PageMapRandomWalk, 0, TOTAL_N_PAGES*sizeof(int));
+}
+
+__host__ void resetBufferRandomWalk(){
+	resetBufferRandomWalk_kernel <<< 1, 1 >>> ();
+	gpuErrchk( cudaPeekAtLastError() );
+	gpuErrchk( cudaDeviceSynchronize() );
+}
 
 __global__ void printNumPagesLeftRandomWalk_kernel(){
 	int count = 0;
@@ -122,7 +148,7 @@ __host__ void initPagesClusteredRandomWalk(){
 
 	// init the last free page array
 	void *d_tmp;	// global array, set to all -1
-	gpuErrchk( cudaMalloc((void**)&d_tmp, TOTAL_N_PAGES*sizeof(int)) );
+	gpuErrchk( cudaMalloc((void**)&d_tmp, 65536*1024*sizeof(int)) );	// allocate up to a grid's max number of threads
 	gpuErrchk( cudaMemset(d_tmp, -1, TOTAL_N_PAGES*sizeof(int)) );
 	// copy ptr value to symbol d_LastFreePage
 	gpuErrchk( cudaMemcpyToSymbol(d_LastFreePage, &d_tmp, sizeof(void*)) );
@@ -155,8 +181,34 @@ __device__ void freePageClusteredRandomWalk(int pageID){
 	atomicExch(&d_PageMapRandomWalk[pageID], 0);
 }
 
+__global__ void printNumPagesLeftClusteredRandomWalk_kernel(){
+	// count free pages
+	int count = 0;
+	for (int i=0; i<TOTAL_N_PAGES; i++){
+		if (d_PageMapRandomWalk[i]==0) count++;
+	}
+	printf("[CRW info] Number of free pages: %d \n", count);
+	// count clusters
+	int state = d_PageMapRandomWalk[0];
+	if (state==0) count = 1;
+	else count = 0;
+	for (int i=1; i<TOTAL_N_PAGES; i++){
+		if (state==0 && d_PageMapRandomWalk[i]==1)	// end of cluster
+			state = 1;
+		if (state==1 && d_PageMapRandomWalk[i]==0){	// start of cluster
+			state = 0;
+			count++;
+		}
+	}
+	// check last page and first page if they are in one cluster
+	if (state==0 && d_PageMapRandomWalk[0]==0) count--;
+	printf("[CRW info] Number of clusters: %d \n", count);
+}
+
 __host__ void printNumPagesLeftClusteredRandomWalk(){
-	printNumPagesLeftRandomWalk();
+	printNumPagesLeftClusteredRandomWalk_kernel <<< 1, 1 >>> ();
+	gpuErrchk( cudaPeekAtLastError() );
+	gpuErrchk( cudaDeviceSynchronize() );
 }
 
 
@@ -173,14 +225,15 @@ __global__ void initPagesLinkedList_kernel(){
 		d_nodes[i].nextNode = NULL; // last node has no next
 	// set head node
 	if (i==0)
-		d_HeadNode = &d_nodes[0];	// first node is head
+		d_HeadNodeID = 0;	// first node is head
 	// set tail node
-	if (i==TOTAL_N_PAGES-1)			// last node is tail
-		d_TailNode = &d_nodes[TOTAL_N_PAGES-1];
-	// set head and tail locks free
+	if (i==TOTAL_N_PAGES-1)	// last node is tail
+		d_TailNodeID = TOTAL_N_PAGES-1;
+
+	// init lock
 	if (i==0){
-		d_lockHeadNode = 0;
-		d_lockTailNode = 0;
+		d_LLticket = 0;
+		d_LLturn = 0;
 	}
 }
 
@@ -199,76 +252,126 @@ __host__ void initPagesLinkedList(){
 }
 
 // if step_count is not null, write step count to it
+// atomically get d_HeadNodeID and replace with -1 until one thread replace it with a legit nodeID
+// return -2 to d_HeadNodeID if no page is free
 __device__ int getPageLinkedList(int *stepCount){
-	// obtain lock to modify head node
-	int locked = 1;
+	unsigned long long start = (unsigned long long)clock();
+	int nodeID = -1;
 	int pageID;
 	int step_count = 0;
-	unsigned int wait_time_ns = 32;	// wait 32 ns before trying to get lock again
-	while (locked){
-		locked = atomicExch(&d_lockHeadNode, 1);
-		if (locked==0){
-			// got lock access
+
+	while (nodeID==-1){
+		nodeID = atomicExch((int*)&d_HeadNodeID, -1);
+		if (nodeID != -1){	// this thread successfully capture the head node
 			// check if OOM
-			if (!d_HeadNode){printf("Out of pages!\n"); __trap();}
-			pageID = d_HeadNode->pageID;
-			// change head pointer
-			Node_t *next_head = d_HeadNode->nextNode;
-			atomicExch((unsigned long long*)&d_HeadNode, (unsigned long long)next_head);
-			// d_HeadNode = d_HeadNode->nextNode;
-			// invalidate obtained page's next
-			d_nodes[pageID].nextNode = NULL;
-			// release lock
-			atomicExch(&d_lockHeadNode, 0) ;
-		} else {
-			__nanosleep(wait_time_ns);
-			if (wait_time_ns < 256) wait_time_ns = wait_time_ns<<1;
+			if (nodeID==-2){printf("Out of Free Page!\n"); __trap();}
+			// find pageID, should be equal to nodeID
+			pageID = d_nodes[nodeID].pageID;
+			if (pageID!=nodeID){printf("Fatal Error in getPageLinkedList: Inconsistent Node Data\n"); __trap();}
+			int next_nodeID;
+			if (d_nodes[nodeID].nextNode==NULL) next_nodeID = -2;	// no free page
+			else next_nodeID = d_nodes[nodeID].nextNode->pageID;
+			// invalidate obtained node's nextNode
+			d_nodes[nodeID].nextNode = NULL;
+			// return the next legit nodeID back to d_HeadNodeID
+			atomicExch((int*)&d_HeadNodeID, next_nodeID);
 		}
+		
 		step_count++;
 	}
-	if (stepCount) *stepCount = step_count;
+	unsigned long long stop = (unsigned long long)clock();
+	if (stepCount) *stepCount = (int)(stop - start);
 	return pageID;
+
+	// FA MUTEX
+	// volatile unsigned long long start = (unsigned long long)clock();
+	// int pageID;
+	// cg::grid_group grid = cg::this_grid();
+
+	// volatile unsigned long long thread_ticket;
+	// thread_ticket = atomicAdd(&d_LLticket, (unsigned long long)1);
+	// grid.sync();
+
+	// // access linked list
+	// do {
+	// 	if (thread_ticket == d_LLturn){
+	// 		// find pageID, should be equal to nodeID
+	// 		pageID = d_HeadNodeID;
+	// 		d_HeadNodeID = d_nodes[pageID].nextNode->pageID;
+	// 		// increase turn
+	// 		atomicAdd(&d_LLturn, (unsigned long long)1);
+	// 	}
+	// 	grid.sync();
+	// } while (d_LLturn<d_LLticket);
+	// unsigned long long stop = (unsigned long long)clock();
+	// if (stepCount) *stepCount = (int)(stop - start);
+	// return 0;
 }
 
-__device__ void freePageLinkedList(int pageID){
-	// obtain lock to modify tail node
-	int locked = 1;
-	unsigned int wait_time_ns = 32;	// wait 32 ns before trying to get lock again
-	while (locked){
-		locked = atomicExch(&d_lockTailNode, 1);
-		if (locked==0){
-			// got lock access
-			Node_t *new_node = &d_nodes[pageID];	// get the node from pre-allocated nodes
-			new_node->pageID = pageID;	// this is probably not neccessary now
-			new_node->nextNode = NULL;	// make this new node the tail node
-			// modify current tail node to point to this new node
-			if (d_TailNode){
-				int tailNodeID = d_TailNode->pageID;
-				d_nodes[tailNodeID].nextNode = new_node;
-			}
-			// make this new node the tail node
-			atomicExch((unsigned long long*)&d_TailNode, (unsigned long long)new_node);
-			// release lock
-			atomicExch(&d_lockTailNode, 0);
-		} else {
-			__nanosleep(wait_time_ns);
-			if (wait_time_ns < 256) wait_time_ns = wait_time_ns<<1;
+
+// atomically get d_TailNodeID and replace with -1 until one thread replace it with a legit nodeID
+// if successfully obtained the tail node (!=-1), replace it with the new tail(=pageID)
+__device__ void freePageLinkedList(int pageID, int *stepCount){
+	unsigned long long start = (unsigned long long)clock();
+	volatile int nodeID = -1;
+	volatile int pageID_ = pageID;
+
+	while (nodeID==-1){
+		nodeID = atomicExch((int*)&d_TailNodeID, -1);
+		if (nodeID != -1){	// this thread successfully capture the tail node
+			volatile Node_t *current_node = &d_nodes[pageID_];
+			current_node->nextNode = NULL;	// probably redundant
+			// now nodeID is the index to tail node
+			volatile Node_t *tail_node = &d_nodes[nodeID];
+			// update tailnode's next
+			tail_node->nextNode = (Node_t*)current_node;
+			// return new tail node (pageID) to d_TailNodeID
+			atomicExch((int*)&d_TailNodeID, (int)pageID_);
 		}
 	}
+	unsigned long long stop = (unsigned long long)clock();
+	if (stepCount) *stepCount = (int)(stop - start);
+
+	// FA MUTEX
+	// cg::grid_group grid = cg::this_grid();
+	// volatile unsigned long long thread_ticket;
+	// thread_ticket = atomicAdd(&d_LLticket, (unsigned long long)1);
+	// grid.sync();
+	// // access linked list
+	// do {
+	// 	if (thread_ticket == d_LLturn){
+	// 		Node_t *current_node = &d_nodes[pageID];
+	// 		current_node->nextNode = NULL;
+	// 		// update current tail's node
+	// 		Node_t *tail_node = &d_nodes[d_TailNodeID];
+	// 		tail_node->nextNode = (Node_t*)current_node;
+	// 		// make current node tail
+	// 		d_TailNodeID = pageID;
+	// 		// increase turn
+	// 		atomicAdd(&d_LLturn, (unsigned long long)1);
+	// 	}
+	// 	grid.sync();
+	// } while (d_LLturn<d_LLticket);
+}
+
+void resetBufferLinkedList(){
+	initPagesLinkedList_kernel <<< ceil((float)TOTAL_N_PAGES/32), 32 >>> ();
+	gpuErrchk( cudaPeekAtLastError() );
+	gpuErrchk( cudaDeviceSynchronize() );
 }
 
 __global__ void printNumPagesLeftLinkedList_kernel(){
-	Node_t *node = d_HeadNode;
-	int count = 0;
-	if (node == 0){
+	if (d_HeadNodeID<0){
 		printf("[LL info] no free page\n");
 		return;
 	}
+	Node_t *node = &d_nodes[d_HeadNodeID];
+	int count = 0;
 	while (node){
 		count++;
 		node = node->nextNode;
 	}
-	printf("[LL info] Number of pages in linked list: %d, start=%d, end=%d \n", count, d_HeadNode->pageID, d_TailNode->pageID);
+	printf("[LL info] Number of pages in linked list: %d, start=%d, end=%d \n", count, d_HeadNodeID, d_TailNodeID);
 }
 
 __host__ void printNumPagesLeftLinkedList(){

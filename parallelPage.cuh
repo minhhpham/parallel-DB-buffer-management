@@ -11,6 +11,7 @@ extern __host__ void initPagesRandomWalk(); 		// must run before any kernel that
 extern __device__ int getPageRandomWalk(int *step_count=0);
 extern __device__ void freePageRandomWalk(int pageID);
 extern __host__ void printNumPagesLeftRandomWalk();
+extern __host__ void resetBufferRandomWalk();
 
 /* functions for Clustered Random Walks */
 extern __host__ void initPagesClusteredRandomWalk();	// must run before any kernel that has the 2 functions below
@@ -21,8 +22,9 @@ extern __host__ void printNumPagesLeftClusteredRandomWalk();
 /* functions for LinkedList */
 extern __host__ void initPagesLinkedList();		// must run before any kernel that has the 2 functions below
 extern __device__ int getPageLinkedList(int *step_count=0);
-extern __device__ void freePageLinkedList(int pageID);
+extern __device__ void freePageLinkedList(int pageID, int *step_count=0);
 extern __host__ void printNumPagesLeftLinkedList();
+extern __host__ void resetBufferLinkedList();
 
 
 /*CUDA ERROR HANDLER*/

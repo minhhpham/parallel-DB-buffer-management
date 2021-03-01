@@ -37,7 +37,7 @@ Metrics_t runClusteredRandomWalk(int Nthreads, int NFree){
 
 	// run kernel until get to NFree
 	resetBufferRandomWalk();
-	// printNumPagesLeftRandomWalk();
+	// printNumPagesLeftClusteredRandomWalk();
 	int NGets = TOTAL_N_PAGES - NFree;
 	for (int i=0; i<(NGets/5000); i++){
 		ClusteredRandomWalk_get1page_kernel <<< ceil((float)5000/32), 32 >>> (5000, 0);
@@ -51,7 +51,7 @@ Metrics_t runClusteredRandomWalk(int Nthreads, int NFree){
 		gpuErrchk( cudaDeviceSynchronize() );
 	}
 
-	printNumPagesLeftClusteredRandomWalk();
+	// printNumPagesLeftClusteredRandomWalk();
 	// execute kernel;
 	cudaEvent_t start, stop;
 	cudaEventCreate(&start);
@@ -83,7 +83,7 @@ int main(int argc, char const *argv[])
 	gpuErrchk(cudaSetDevice(0));
 	/* command descriptions */
 	if(argc>1 && ((strncmp(argv[1], "-h", 2) == 0) || (strncmp(argv[1], "-help", 4) == 0))){
-		fprintf(stderr, "USAGE: ./unitClusteredTestRandomWalk [options]\n");
+		fprintf(stderr, "USAGE: ./unitTestClusteredRandomWalk [options]\n");
 		fprintf(stderr, "OPTIONS:\n");
 		// fprintf(stderr, "\t -pn, --pageNum <pageNum>\n");
 		// fprintf(stderr, "\t\t Total Pages, default is 1000000\n\n");
@@ -110,16 +110,38 @@ int main(int argc, char const *argv[])
 	initPagesClusteredRandomWalk();
 	printNumPagesLeftClusteredRandomWalk();
 
+	Metrics_t *metrics_array = (Metrics_t*)malloc(100*sizeof(Metrics_t));
+
 	/* repeat getpage with Random Walk */
 	fprintf(stderr, "unit test with Total Pages = %d, Nthreads = %d ...\n", TOTAL_N_PAGES, Nthreads);
-	int AvailablePages = 5000;
+	Nthreads = 5000;
 	printf("T,N,A,Average_steps,Average_Max_Warp,Time(ms)\n");
-	for (Nthreads=1; Nthreads<5000; Nthreads+=50){
-		// run kernel to get 1 page for each thread
-		Metrics_t metrics = runClusteredRandomWalk(Nthreads, AvailablePages);
+	for (int AvailablePages=700000; AvailablePages>=500000; AvailablePages-=5000){
+		printf("%d,%d,%d,", TOTAL_N_PAGES, Nthreads, AvailablePages);
+
+		// run 100 times
+		Metrics_t metrics_array[100];
+		for (int trial=0; trial<100; trial++){
+			metrics_array[trial] = runClusteredRandomWalk(Nthreads, AvailablePages);
+			// printf("%f\n", metrics_array[trial].runTime);
+		}
+
+		// take avg
+		float avgStep = 0;
+		float avgMaxWarp = 0;
+		float avgTime = 0;
+		for (int i=0; i<100; i++){
+			avgStep+=metrics_array[i].avgStep;
+			avgMaxWarp+=metrics_array[i].avgMaxWarp;
+			avgTime+=metrics_array[i].runTime;
+		}
+		avgStep = avgStep/100;
+		avgMaxWarp = avgMaxWarp/100;
+		avgTime = avgTime/100;
+
+
 		// print results to stdout
-		printf("%d,%d,%d,%f,%f,%f\n", TOTAL_N_PAGES, Nthreads, AvailablePages, metrics.avgStep, metrics.avgMaxWarp, metrics.runTime);
-		// AvailablePages-=Nthreads;
+		printf("%f,%f,%f\n", avgStep, avgMaxWarp, avgTime);
 	}	
 
 	return 0;
