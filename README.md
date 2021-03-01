@@ -1,7 +1,7 @@
 # Buffer Management in Massively Parallel Systems
 
 ## Description
-This is code for implementation of scalable buffer managers in GPUs. Unit Tests are also included in files `unitTest*`.
+This is code for implementation of scalable buffer managers in GPU database systems. Unit Tests are also included in files `unitTest*`.
 
 ## How to use
  - Copy `parallelPage.cu` and `parallelPage.cuh` to your project
