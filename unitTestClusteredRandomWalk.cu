@@ -9,6 +9,7 @@ static __device__ void fillPage(void *page){
 
 /* Kernel to get 1 page with Random Walk, record step counts */
 __global__ void ClusteredRandomWalk_get1page_kernel(int Nthreads, int *d_step_counts){
+	return;
 	int tid = blockIdx.x*blockDim.x + threadIdx.x;
 	if (tid<Nthreads){
 		int step_counts;
@@ -51,7 +52,6 @@ Metrics_t runClusteredRandomWalk(int Nthreads, int NFree){
 		gpuErrchk( cudaDeviceSynchronize() );
 	}
 
-	printNumPagesLeftClusteredRandomWalk();
 	// execute kernel;
 	cudaEvent_t start, stop;
 	cudaEventCreate(&start);
@@ -112,9 +112,9 @@ int main(int argc, char const *argv[])
 
 	/* repeat getpage with Random Walk */
 	fprintf(stderr, "unit test with Total Pages = %d, Nthreads = %d ...\n", TOTAL_N_PAGES, Nthreads);
-	int AvailablePages = 5000;
+	int AvailablePages = 100000;
 	printf("T,N,A,Average_steps,Average_Max_Warp,Time(ms)\n");
-	for (Nthreads=1; Nthreads<5000; Nthreads+=50){
+	for (Nthreads=1; Nthreads<10000; Nthreads+=50){
 		// run kernel to get 1 page for each thread
 		Metrics_t metrics = runClusteredRandomWalk(Nthreads, AvailablePages);
 		// print results to stdout

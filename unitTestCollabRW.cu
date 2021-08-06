@@ -8,12 +8,12 @@ static __device__ void fillPage(void *page){
 }
 
 /* Kernel to get 1 page with Random Walk, record step counts */
-__global__ void RandomWalk_get1page_kernel(int Nthreads, int *d_step_counts){
+__global__ void CollabRW_get1page_kernel(int Nthreads, int *d_step_counts){
 	int tid = blockIdx.x*blockDim.x + threadIdx.x;
 	if (tid<Nthreads){
 		int step_counts;
 		int *tmp = d_step_counts? &step_counts : 0;
-		int pageID = getPageRandomWalk(tmp);
+		int pageID = getPageCollabRW(tmp);
 		if (d_step_counts) d_step_counts[tid] = step_counts;
 		// mem check
 		// void *page = pageAddress(pageID);
@@ -28,7 +28,7 @@ __global__ void RandomWalk_get1page_kernel(int Nthreads, int *d_step_counts){
 			*avgMaxWarp:	average of Max of Warp across all warps
 			*runTime:		total run time (s)
  */
-Metrics_t runRandomWalk(int Nthreads, int NFree){
+Metrics_t runCollabRW(int Nthreads, int NFree){
 	// allocate metrics array on host
 	int *h_step_counts = (int*)malloc(10000*sizeof(int));
 	// allocate metrics array on gpu
@@ -36,28 +36,29 @@ Metrics_t runRandomWalk(int Nthreads, int NFree){
 	gpuErrchk( cudaMalloc((void**)&d_step_counts, 10000*sizeof(int)) );
 
 	// run kernel until get to NFree
-	resetBufferRandomWalk();
-	// printNumPagesLeftRandomWalk();
+	resetBufferCollabRW();
+	// printNumPagesLeftCollabRW();
 	int NGets = TOTAL_N_PAGES - NFree;
 	for (int i=0; i<(NGets/5000); i++){
-		RandomWalk_get1page_kernel <<< ceil((float)5000/32), 32 >>> (5000, 0);
+		CollabRW_get1page_kernel <<< ceil((float)5000/32), 32 >>> (5000, 0);
 		gpuErrchk( cudaPeekAtLastError() );
 		gpuErrchk( cudaDeviceSynchronize() );
 	}
-
+	// printNumPagesLeftCollabRW();
 	for (int i=0; i<(NGets-(NGets/5000)*5000)/1000; i++){
-		RandomWalk_get1page_kernel <<< ceil((float)1000/32), 32 >>> (1000, 0);
+		CollabRW_get1page_kernel <<< ceil((float)1000/32), 32 >>> (1000, 0);
 		gpuErrchk( cudaPeekAtLastError() );
 		gpuErrchk( cudaDeviceSynchronize() );
 	}
+	// printNumPagesLeftCollabRW();
 
-	// printNumPagesLeftRandomWalk();
+	// printNumPagesLeftCollabRW();
 	// execute kernel;
 	cudaEvent_t start, stop;
 	cudaEventCreate(&start);
 	cudaEventCreate(&stop);
 	cudaEventRecord(start, 0);
-	RandomWalk_get1page_kernel <<< ceil((float)Nthreads/32), 32 >>> (Nthreads, d_step_counts);
+	CollabRW_get1page_kernel <<< ceil((float)Nthreads/32), 32 >>> (Nthreads, d_step_counts);
 	gpuErrchk( cudaPeekAtLastError() );
 	gpuErrchk( cudaDeviceSynchronize() );
 	cudaEventRecord(stop, 0);
@@ -83,7 +84,7 @@ int main(int argc, char const *argv[])
 	gpuErrchk(cudaSetDevice(0));
 	/* command descriptions */
 	if(argc>1 && ((strncmp(argv[1], "-h", 2) == 0) || (strncmp(argv[1], "-help", 4) == 0))){
-		fprintf(stderr, "USAGE: ./unitTestRandomWalk [options]\n");
+		fprintf(stderr, "USAGE: ./unitTestCollabRW [options]\n");
 		fprintf(stderr, "OPTIONS:\n");
 		// fprintf(stderr, "\t -pn, --pageNum <pageNum>\n");
 		// fprintf(stderr, "\t\t Total Pages, default is 1000000\n\n");
@@ -107,8 +108,8 @@ int main(int argc, char const *argv[])
 
 	/* initialize system, all pages free, parameters defined in parallelPage.cuh */
 	fprintf(stderr, "initializing page system ... \n");
-	initPagesRandomWalk();
-	printNumPagesLeftRandomWalk();
+	initPagesCollabRW();
+	// printNumPagesLeftCollabRW();
 
 	/* repeat getpage with Random Walk */
 	fprintf(stderr, "unit test with Total Pages = %d, Nthreads = %d ...\n", TOTAL_N_PAGES, Nthreads);
@@ -116,7 +117,7 @@ int main(int argc, char const *argv[])
 	printf("T,N,A,Average_steps,Average_Max_Warp,Time(ms)\n");
 	for (Nthreads=1; Nthreads<50000; Nthreads+=50){
 		// run kernel to get 1 page for each thread
-		Metrics_t metrics = runRandomWalk(Nthreads, AvailablePages);
+		Metrics_t metrics = runCollabRW(Nthreads, AvailablePages);
 		// print results to stdout
 		printf("%d,%d,%d,%f,%f,%f\n", TOTAL_N_PAGES, Nthreads, AvailablePages, metrics.avgStep, metrics.avgMaxWarp, metrics.runTime);
 		// AvailablePages-=Nthreads;

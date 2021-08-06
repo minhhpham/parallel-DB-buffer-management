@@ -1,6 +1,10 @@
 #include "parallelPage.cuh"
 #include <stdint.h>
 #include <cooperative_groups.h>
+#include <time.h>
+#include <stdlib.h>
+#include <assert.h>
+
 namespace cg = cooperative_groups;
 
 #define GROUP_N_PAGES 100000   // group pages for faster initialization
@@ -21,6 +25,8 @@ __device__ void *pageAddress(int pageID){
 /* data structures for Random Walk*/
 // for each element: 0 means page is free, 1 means page is occupied
 static __device__ int *d_PageMapRandomWalk;
+static __device__ int *d_RNG;
+static __device__ int *d_RNG_idx;
 
 /* data structures for Clustered Random Walk */
 static __device__ int *d_LastFreePage;	// last free pageID obtained by each thread by calling freePageClusteredRandomWalk(), -1 if not initialized
@@ -65,6 +71,40 @@ __host__ void initPages(){
 
 
 /* RANDOM WALK IMPLEMENTATION */
+
+/* Arrange the N elements of ARRAY in random order.
+   Only effective if N is much smaller than RAND_MAX;
+   if this may not be the case, use a better random
+   number generator. */
+static inline void shuffle(int *array, size_t n)
+{
+    if (n > 1) 
+    {
+        size_t i;
+        for (i = 0; i < n - 1; i++) 
+        {
+          size_t j = i + rand() / (RAND_MAX / (n - i) + 1);
+          int t = array[j];
+          array[j] = array[i];
+          array[i] = t;
+        }
+    }
+}
+
+/* function to replace curand, better efficiency */
+#define LCG_M 1<<31
+#define LCG_A 1103515245
+#define LCG_C 12345
+__device__ static inline int RNG_LCG(int seed){
+    long long seed_ = (long long)seed;
+    return (int)((LCG_A*seed_ + LCG_C)%(LCG_M));
+    // uint32_t x = seed;
+    // x ^= x << 13;
+    // x ^= x >> 17;
+    // x ^= x << 5;
+    // return x;
+}
+
 /* initialize TOTAL_N_PAGES pages on GPU's global memory, each page is PAGE_SIZE large
 also initialize the page map structure with all 0 (all free) */
 __host__ void initPagesRandomWalk(){
@@ -76,19 +116,35 @@ __host__ void initPagesRandomWalk(){
 	gpuErrchk( cudaMalloc((void**)&h_PageMapRandomWalk, TOTAL_N_PAGES*sizeof(int)) );
 	gpuErrchk( cudaMemcpyToSymbol(d_PageMapRandomWalk, &h_PageMapRandomWalk, sizeof(void*)) );
 	gpuErrchk( cudaMemset(h_PageMapRandomWalk, 0, TOTAL_N_PAGES*sizeof(int)) );
+
+	// initialize random numbers
+	int *h_RNG;
+	gpuErrchk( cudaMalloc((void**)&h_RNG, TOTAL_N_PAGES*sizeof(int)) ); // allocate memory on device then copy to symbol
+	gpuErrchk( cudaMemcpyToSymbol(d_RNG, &h_RNG, sizeof(void*)) );
+	srand(time(NULL));
+	int *tmp = (int*)malloc(TOTAL_N_PAGES*sizeof(int));
+	for (int i=0; i<TOTAL_N_PAGES; i++)
+		tmp[i] = i;
+	shuffle(tmp, TOTAL_N_PAGES);
+	// copy rng numbers to device
+	gpuErrchk( cudaMemcpy(h_RNG, tmp, TOTAL_N_PAGES*sizeof(int), cudaMemcpyHostToDevice) );
+
+	// initialize RNG index
+	for (int i=0; i<TOTAL_N_PAGES; i++)
+		tmp[i] = 0;
+	// copy RNG index to device
+	int *h_RNG_idx;
+	gpuErrchk( cudaMalloc((void**)&h_RNG_idx, TOTAL_N_PAGES*sizeof(int)) ); // allocate memory on device then copy to symbol
+	gpuErrchk( cudaMemcpyToSymbol(d_RNG_idx, &h_RNG_idx, sizeof(void*)) );
+	gpuErrchk( cudaMemcpy(h_RNG_idx, tmp, TOTAL_N_PAGES*sizeof(int), cudaMemcpyHostToDevice) );
+
+	free(tmp);
 }
 
 
-/* function to replace curand, better efficiency */
-#define LCG_M 1<<31
-#define LCG_A 1103515245
-#define LCG_C 12345
-__device__ static inline int RNG_LCG(int seed){
-    long long seed_ = (long long)seed;
-    return (int)((LCG_A*seed_ + LCG_C)%(LCG_M));
-}
 
 // if step_count is not null, write step count to it
+__device__ int d_counter = 0;
 __device__ int getPageRandomWalk(int *stepCount){
 	int tid = blockIdx.x*blockDim.x + threadIdx.x;
 	int16_t Clock = (int16_t)clock();
@@ -103,6 +159,11 @@ __device__ int getPageRandomWalk(int *stepCount){
 		pageID = seed % TOTAL_N_PAGES;
 		step_count++;
 	}
+
+	// int pageID = tid*100;
+	// atomicExch(&d_PageMapRandomWalk[pageID],1);
+	// int step_count = 1;
+
 	if (stepCount) *stepCount = step_count;
 	return pageID;
 }
@@ -376,6 +437,267 @@ __global__ void printNumPagesLeftLinkedList_kernel(){
 
 __host__ void printNumPagesLeftLinkedList(){
 	printNumPagesLeftLinkedList_kernel <<< 1, 1 >>> ();
+	gpuErrchk( cudaPeekAtLastError() );
+	gpuErrchk( cudaDeviceSynchronize() );
+}
+
+
+
+/* ------------------------------------- Single Clock Implementation -------------------------------------------- */
+static __device__ int d_SingleClockArm;		// index to page number, from 0 to TOTAL_N_PAGES-1
+static __device__ int *d_pageMapSingleClock;
+
+/* initialize TOTAL_N_PAGES pages on GPU's global memory, each page is PAGE_SIZE large
+also initialize the page map structure with all 0 (all free)
+set clock arm to 0
+ */
+__host__ void initPagesSingleClock(){
+	// initialize actual pages
+	initPages();
+	// initialize page map
+	void *h_pageMapSingleClock;
+	gpuErrchk( cudaMalloc((void**)&h_pageMapSingleClock, TOTAL_N_PAGES*sizeof(int)) );
+	gpuErrchk( cudaMemcpyToSymbol(d_pageMapSingleClock, &h_pageMapSingleClock, sizeof(void*)) );
+	gpuErrchk( cudaMemset(h_pageMapSingleClock, 0, TOTAL_N_PAGES*sizeof(int)) );
+	// set clock arm to 0
+	int zero = 0;
+	gpuErrchk( cudaMemcpyToSymbol(d_SingleClockArm, &zero, sizeof(int)) );
+}
+
+__device__ int getPageSingleClock(int *step_count){
+	bool foundFreePage = false;
+	int pageID;
+	int stepCount = 0;
+	while (!foundFreePage){
+		stepCount++;
+		// atomically shift the arm
+		pageID = atomicAdd(&d_SingleClockArm, 1);
+		pageID = pageID % TOTAL_N_PAGES;
+		// check if the obtained position is available
+		if (d_pageMapSingleClock[pageID] == 0){
+			foundFreePage = true;
+			// mark page as used
+			atomicExch(&d_pageMapSingleClock[pageID], 1);
+		}
+	}
+	if (step_count) *step_count = stepCount;
+	return pageID;
+}
+
+__device__ void freePageSingleClock(int pageID, int *step_count){
+	atomicExch(&(d_pageMapSingleClock[pageID]), 0);
+}
+
+__global__ void printNumPagesLeftSingleClock_kernel(){
+	int count = 0;
+	for (int i=0; i<TOTAL_N_PAGES; i++){
+		if (d_pageMapSingleClock[i]==0) count++;
+	}
+	printf("[SC info] Number of free pages: %d \n", count);
+}
+__host__ void printNumPagesLeftSingleClock(){
+	printNumPagesLeftSingleClock_kernel <<< 1, 1 >>> ();
+	gpuErrchk( cudaPeekAtLastError() );
+	gpuErrchk( cudaDeviceSynchronize() );
+}
+
+__global__ void resetBufferSingleClock_kernel(){
+	memset(d_pageMapSingleClock, 0, TOTAL_N_PAGES*sizeof(int));
+}
+__host__ void resetBufferSingleClock(){
+	resetBufferSingleClock_kernel <<< 1, 1 >>> ();
+	gpuErrchk( cudaPeekAtLastError() );
+	gpuErrchk( cudaDeviceSynchronize() );
+}
+
+/* ------------------------------------- Parallel Clock Implementation -------------------------------------------- */
+#define MAX_THREADS_DISTCLOCK 1000000
+static __device__ int *d_DistClockArm;		// indexes to page number, from 0 to TOTAL_N_PAGES-1
+static __device__ int *d_pageMapDistClock;
+
+/* initialize TOTAL_N_PAGES pages on GPU's global memory, each page is PAGE_SIZE large
+also initialize the page map structure with all 0 (all free)
+randomize a number for each clock arm
+ */
+static __global__ void randomizeArmDistClock(){
+	int tid = blockIdx.x*blockDim.x + threadIdx.x;
+	if (tid>=MAX_THREADS_DISTCLOCK) return;
+	int16_t Clock = (int16_t)clock();
+	int seed = (tid<<15) + Clock;
+	seed = RNG_LCG(seed);
+	seed = seed % TOTAL_N_PAGES;
+	d_DistClockArm[tid] = seed;
+}
+
+__host__ void initPagesDistClock(){
+	// initialize actual pages
+	initPages();
+	// initialize page map
+	void *h_pageMapDistClock;
+	gpuErrchk( cudaMalloc((void**)&h_pageMapDistClock, TOTAL_N_PAGES*sizeof(int)) );
+	gpuErrchk( cudaMemcpyToSymbol(d_pageMapDistClock, &h_pageMapDistClock, sizeof(void*)) );
+	gpuErrchk( cudaMemset(h_pageMapDistClock, 0, TOTAL_N_PAGES*sizeof(int)) );
+	// randomize arms
+	void *_d_DistClockArm;
+	gpuErrchk( cudaMalloc((void**)&_d_DistClockArm, MAX_THREADS_DISTCLOCK*sizeof(int)) );
+	gpuErrchk( cudaMemcpyToSymbol(d_DistClockArm, &_d_DistClockArm, sizeof(void*)) );
+	randomizeArmDistClock <<< ceil((float)MAX_THREADS_DISTCLOCK/32), 32 >>> ();
+}
+
+__device__ int getPageDistClock(int *step_count){
+	int tid = blockIdx.x*blockDim.x + threadIdx.x;
+	bool foundFreePage = false;
+	int pageID;
+	int stepCount = 0;
+	while (!foundFreePage){
+		stepCount++;
+		pageID = d_DistClockArm[tid]%TOTAL_N_PAGES;
+		// check if page at current arm is free
+		if (d_pageMapDistClock[pageID]==0){
+			// try to mark page as taken
+			int old_val = atomicExch(&(d_pageMapDistClock[pageID]), 1);
+			if (old_val == 0)
+				// this thread got the page
+				foundFreePage = true;
+		}
+		// move arm
+		d_DistClockArm[tid] = pageID + 1;
+	}
+	if (step_count) *step_count = stepCount;
+	return pageID;
+}
+
+__device__ void freePageDistClock(int pageID, int *step_count){
+	atomicExch(&(d_pageMapDistClock[pageID]), 0);
+}
+
+__global__ void printNumPagesLeftDistClock_kernel(){
+	int count = 0;
+	for (int i=0; i<TOTAL_N_PAGES; i++){
+		if (d_pageMapDistClock[i]==0) count++;
+	}
+	printf("[DC info] Number of free pages: %d \n", count);
+}
+__host__ void printNumPagesLeftDistClock(){
+	printNumPagesLeftDistClock_kernel <<< 1, 1 >>> ();
+	gpuErrchk( cudaPeekAtLastError() );
+	gpuErrchk( cudaDeviceSynchronize() );
+}
+
+__global__ void resetBufferDistClock_kernel(){
+	memset(d_pageMapDistClock, 0, TOTAL_N_PAGES*sizeof(int));
+}
+__host__ void resetBufferDistClock(){
+	resetBufferDistClock_kernel <<< 1, 1 >>> ();
+	gpuErrchk( cudaPeekAtLastError() );
+	gpuErrchk( cudaDeviceSynchronize() );
+}
+
+
+
+/* ------------- COLLABORATIVE RANDOM WALK IMPLEMENTATION --------------------- */
+
+/* Arrange the N elements of ARRAY in random order.
+   Only effective if N is much smaller than RAND_MAX;
+   if this may not be the case, use a better random
+   number generator. */
+
+/* function to replace curand, better efficiency */
+#define WARPSIZE 32
+
+__device__ int *d_PageMapCollabRW;      // length TOTAL_N_PAGES
+
+/* initialize TOTAL_N_PAGES pages on GPU's global memory, each page is PAGE_SIZE large
+also initialize the page map structure with all 0 (all free) */
+__host__ void initPagesCollabRW(){
+	// initialize actual pages
+	initPages();
+
+	// initialize page map of length TOTAL_N_PAGES
+	void *h_PageMapCollabRW;
+	gpuErrchk( cudaMalloc((void**)&h_PageMapCollabRW, TOTAL_N_PAGES*sizeof(int)) );
+	gpuErrchk( cudaMemcpyToSymbol(d_PageMapCollabRW, &h_PageMapCollabRW, sizeof(void*)) );
+	gpuErrchk( cudaMemset(h_PageMapCollabRW, 0, TOTAL_N_PAGES*sizeof(int)) );
+	
+}
+
+// if step_count is not null, write step count to it
+__device__ int getPageCollabRW(int *stepCount){
+	// initialize shared memory
+	__shared__ int S_pageIDs_block[1024];  // this is to signal compiler to allocate enough for the entire block
+	__shared__ int S_NPagesFound_blk[32];  
+	int *S_pageIDs; 			// this is the shared array for the warp, calculated below
+	int warpID = threadIdx.x>>5;
+	S_pageIDs = &S_pageIDs_block[warpID<<5];
+	int *S_NPagesFound = &S_NPagesFound_blk[warpID];    // keep track of number of pages found per warp
+	if (threadIdx.x==0) *S_NPagesFound = 0;
+	// find number of requests
+	int NRequests = __popc(__activemask());
+
+	// all active threads try find a random page every round
+	int tid = blockIdx.x*blockDim.x + threadIdx.x;
+	int seed = (tid<<15) + ((int16_t)clock());
+	int stepCount_ = 0;
+	// variable meaning:
+		// S_NPagesFound: warp-shared counter of number of pages found 
+	while (*S_NPagesFound<NRequests) {
+		stepCount_++;
+		// find a random page
+		seed = RNG_LCG(seed);
+		unsigned pageID_ = (unsigned)(seed % TOTAL_N_PAGES);
+		// check if page is available
+		if (d_PageMapCollabRW[pageID_]==0){
+			// if page is available, try to grab it
+			int result = atomicExch(&d_PageMapCollabRW[pageID_],1);
+			// if successful, add 1 to S_NPagesFound and add pageID to S_pageIDs
+			if (result==0){
+				int pos = atomicAdd(S_NPagesFound, 1);
+				// if we have found more than what we need, return the page
+				if (pos>=NRequests)
+					freePageCollabRW(pageID_);
+				// otherwise, add the pageID to the shared array
+				else 
+					S_pageIDs[pos] = pageID_;
+			}
+		}
+	}
+
+	// we have found enough pages and stored their IDs on shared memory
+	// now grab them from shared memory
+	int pos = atomicSub(S_NPagesFound, 1) - 1;
+	int pageID = S_pageIDs[pos];
+
+	if (stepCount) *stepCount = stepCount_;
+	return pageID;
+}
+
+
+__device__ void freePageCollabRW(int pageID){
+	atomicAnd(&d_PageMapCollabRW[pageID], 0);
+}
+
+
+__global__ void resetBufferCollabRW_kernel(){
+	// set page map to 0
+	memset(d_PageMapCollabRW, 0, TOTAL_N_PAGES*sizeof(int));
+}
+
+__host__ void resetBufferCollabRW(){
+	resetBufferCollabRW_kernel <<< 1, 1 >>> ();
+	gpuErrchk( cudaPeekAtLastError() );
+	gpuErrchk( cudaDeviceSynchronize() );
+}
+
+__global__ void printNumPagesLeftCollabRW_kernel(){
+	int count = 0;
+	for (int i=0; i<TOTAL_N_PAGES; i++){
+		if (d_PageMapCollabRW[i]==0) count++;
+	}
+	printf("[CoRW info] Number of free pages: %d \n", count);
+}
+
+__host__ void printNumPagesLeftCollabRW(){
+	printNumPagesLeftCollabRW_kernel <<< 1, 1 >>> ();
 	gpuErrchk( cudaPeekAtLastError() );
 	gpuErrchk( cudaDeviceSynchronize() );
 }
