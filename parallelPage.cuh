@@ -26,6 +26,50 @@ extern __device__ void freePageLinkedList(int pageID, int *step_count=0);
 extern __host__ void printNumPagesLeftLinkedList();
 extern __host__ void resetBufferLinkedList();
 
+/* functions for Single Clock */
+extern __host__ void initPagesSingleClock();		// must run before any kernel that has the 2 functions below
+extern __device__ int getPageSingleClock(int *step_count=0);
+extern __device__ void freePageSingleClock(int pageID, int *step_count=0);
+extern __host__ void printNumPagesLeftSingleClock();
+extern __host__ void resetBufferSingleClock();
+
+/* functions for Distributed Clock*/
+extern __host__ void initPagesDistClock();		// must run before any kernel that has the 2 functions below
+extern __device__ int getPageDistClock(int *step_count=0);
+extern __device__ void freePageDistClock(int pageID, int *step_count=0);
+extern __host__ void printNumPagesLeftDistClock();
+extern __host__ void resetBufferDistClock();
+
+/* functions for Collaborative Random Walk*/
+extern __host__ void initPagesCollabRW();     // must run before any kernel that has the 2 functions below
+extern __device__ int getPageCollabRW(int *step_count=0);
+extern __device__ void freePageCollabRW(int pageID);
+extern __host__ void printNumPagesLeftCollabRW();
+extern __host__ void resetBufferCollabRW();
+
+/* functions for Collaborative Random Walk + BitMap */
+extern __host__ void initPagesCollabRW_BM();     // must run before any kernel that has the 2 functions below
+extern __device__ int getPageCollabRW_BM(int *step_count=0);
+extern __device__ void freePageCollabRW_BM(int pageID);
+extern __host__ void printNumPagesLeftCollabRW_BM();
+extern __host__ void resetBufferCollabRW_BM();
+
+/* functions for Random Walk + BitMap */
+extern __host__ void initPagesRandomWalk_BM();     // must run before any kernel that has the 2 functions below
+extern __device__ int getPageRandomWalk_BM(int *step_count=0);
+extern __device__ int getXPageRandomWalk_BM(int X, int *step_count=0);	// get X consecutive pages
+extern __device__ void freePageRandomWalk_BM(int pageID);
+extern __host__ void printNumPagesLeftRandomWalk_BM();
+extern __host__ void resetBufferRandomWalk_BM();
+
+/* functions for Clustered Random Walk + BitMap */
+extern __host__ void initPagesClusteredRandomWalk_BM();     // must run before any kernel that has the 2 functions below
+extern __device__ int getPageClusteredRandomWalk_BM(int *step_count=0);
+extern __device__ int getXPageClusteredRandomWalk_BM(int X, int *step_count=0); // get X consecutive pages
+extern __device__ void freePageClusteredRandomWalk_BM(int pageID);
+extern __host__ void printNumPagesLeftClusteredRandomWalk_BM();
+extern __host__ void resetBufferClusteredRandomWalk_BM();
+
 
 /*CUDA ERROR HANDLER*/
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
