@@ -117,6 +117,7 @@ int main(int argc, char const *argv[])
 
 	/* repeat getpage with Random Walk */
 	fprintf(stderr, "unit test with Total Pages = %d, Nthreads = %d ...\n", TOTAL_N_PAGES, Nthreads);
+<<<<<<< HEAD
 	int AvailablePages = TOTAL_N_PAGES;
 	Metrics_t metrics;
 	printf("T,N,A,Average_steps,Average_Max_Warp,Time(ms)\n");
@@ -135,6 +136,13 @@ int main(int argc, char const *argv[])
 		metrics.avgStep /= N_SAMPLES;
 		metrics.avgMaxWarp /= N_SAMPLES;
 		metrics.runTime /= N_SAMPLES;
+=======
+	int AvailablePages = 100000;
+	printf("T,N,A,Average_steps,Average_Max_Warp,Time(ms)\n");
+	for (Nthreads=1; Nthreads<50000; Nthreads+=50){
+		// run kernel to get 1 page for each thread
+		Metrics_t metrics = runRandomWalk(Nthreads, AvailablePages);
+>>>>>>> 1add8d378566bca1e19231bf7eb4e6c4d8a7969f
 		// print results to stdout
 		printf("%d,%d,%d,%f,%f,%f\n", TOTAL_N_PAGES, Nthreads, AvailablePages, metrics.avgStep, metrics.avgMaxWarp, metrics.runTime);
 	}

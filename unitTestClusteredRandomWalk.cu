@@ -9,6 +9,7 @@ static __device__ void fillPage(void *page){
 
 /* Kernel to get 1 page with Random Walk, record step counts */
 __global__ void ClusteredRandomWalk_get1page_kernel(int Nthreads, int *d_step_counts){
+	return;
 	int tid = blockIdx.x*blockDim.x + threadIdx.x;
 	if (tid<Nthreads){
 		int step_counts;
