@@ -1,7 +1,7 @@
 #include <stdio.h>
 
-#define TOTAL_N_PAGES 	1000000
-#define PAGE_SIZE		4096		// each page is 4 KB
+#define TOTAL_N_PAGES 	41900000
+#define PAGE_SIZE		264	
 
 // function to return pointer to start of a page given pageID
 extern __device__ void *pageAddress(int pageID); 
@@ -12,6 +12,9 @@ extern __device__ int getPageRandomWalk(int *step_count=0);
 extern __device__ void freePageRandomWalk(int pageID);
 extern __host__ void printNumPagesLeftRandomWalk();
 extern __host__ void resetBufferRandomWalk();
+extern __host__ void monitorBufferRandomWalk(int msGap=100, int maxCount=100);
+// monitorBufferRandomWalk: check the status of Buffer pool every msGap ms, up to maxCount times
+// call this function at any time, it will run on a parallel CUDA stream
 
 /* functions for Clustered Random Walks */
 extern __host__ void initPagesClusteredRandomWalk();	// must run before any kernel that has the 2 functions below
@@ -50,6 +53,7 @@ extern __host__ void resetBufferCollabRW();
 /* functions for Collaborative Random Walk + BitMap */
 extern __host__ void initPagesCollabRW_BM();     // must run before any kernel that has the 2 functions below
 extern __device__ int getPageCollabRW_BM(int *step_count=0);
+extern __device__ int getXPageCollabRW_BM(int X, int *step_count=0);	// get X consecutive pages
 extern __device__ void freePageCollabRW_BM(int pageID);
 extern __host__ void printNumPagesLeftCollabRW_BM();
 extern __host__ void resetBufferCollabRW_BM();

@@ -29,6 +29,9 @@ __global__ void RandomWalk_get1page_kernel(int Nthreads, int *d_step_counts){
 			*runTime:		total run time (s)
  */
 Metrics_t runRandomWalk(int Nthreads, int NFree){
+	cudaStream_t stream1;
+	cudaStreamCreate(&stream1);
+
 	// allocate metrics array on host
 	int *h_step_counts = (int*)malloc(10000*sizeof(int));
 	// allocate metrics array on gpu
@@ -40,15 +43,15 @@ Metrics_t runRandomWalk(int Nthreads, int NFree){
 	// printNumPagesLeftRandomWalk();
 	int NGets = TOTAL_N_PAGES - NFree;
 	for (int i=0; i<(NGets/5000); i++){
-		RandomWalk_get1page_kernel <<< ceil((float)5000/32), 32 >>> (5000, 0);
+		RandomWalk_get1page_kernel <<< ceil((float)5000/32), 32, 0, stream1 >>> (5000, 0);
 		gpuErrchk( cudaPeekAtLastError() );
-		gpuErrchk( cudaDeviceSynchronize() );
+		gpuErrchk( cudaStreamSynchronize(stream1) );
 	}
 
 	for (int i=0; i<(NGets-(NGets/5000)*5000)/1000; i++){
-		RandomWalk_get1page_kernel <<< ceil((float)1000/32), 32 >>> (1000, 0);
+		RandomWalk_get1page_kernel <<< ceil((float)1000/32), 32, 0, stream1 >>> (1000, 0);
 		gpuErrchk( cudaPeekAtLastError() );
-		gpuErrchk( cudaDeviceSynchronize() );
+		gpuErrchk( cudaStreamSynchronize(stream1) );
 	}
 
 	// printNumPagesLeftRandomWalk();
@@ -57,9 +60,9 @@ Metrics_t runRandomWalk(int Nthreads, int NFree){
 	cudaEventCreate(&start);
 	cudaEventCreate(&stop);
 	cudaEventRecord(start, 0);
-	RandomWalk_get1page_kernel <<< ceil((float)Nthreads/32), 32 >>> (Nthreads, d_step_counts);
+	RandomWalk_get1page_kernel <<< ceil((float)Nthreads/32), 32, 0, stream1 >>> (Nthreads, d_step_counts);
 	gpuErrchk( cudaPeekAtLastError() );
-	gpuErrchk( cudaDeviceSynchronize() );
+	gpuErrchk( cudaStreamSynchronize(stream1) );
 	cudaEventRecord(stop, 0);
 	cudaEventSynchronize(stop);
 	float total_time;
@@ -73,7 +76,9 @@ Metrics_t runRandomWalk(int Nthreads, int NFree){
 	// aggregate metrics and return
 	Metrics_t out = aggregate_metrics(h_step_counts, Nthreads);
 	out.runTime = total_time;
+
 	free(h_step_counts); cudaFree(d_step_counts);
+	cudaStreamDestroy(stream1);
 	return out;
 }
 
@@ -112,12 +117,12 @@ int main(int argc, char const *argv[])
 
 	/* repeat getpage with Random Walk */
 	fprintf(stderr, "unit test with Total Pages = %d, Nthreads = %d ...\n", TOTAL_N_PAGES, Nthreads);
-	int AvailablePages = 100000;
-	Nthreads = 9951;
+	int AvailablePages = TOTAL_N_PAGES;
 	Metrics_t metrics;
 	printf("T,N,A,Average_steps,Average_Max_Warp,Time(ms)\n");
-	for (AvailablePages=10000; AvailablePages<=100000; AvailablePages+=30000){
-		int N_SAMPLES = 100; // take average across 100 samples
+
+	for (AvailablePages=TOTAL_N_PAGES; AvailablePages<=TOTAL_N_PAGES; AvailablePages+=1000000){
+		int N_SAMPLES = 1; // take average across 100 samples
 		metrics.avgStep = 0; metrics.avgMaxWarp = 0; metrics.runTime = 0;
 		Metrics_t metrics_1;
 		for (int s=0; s<N_SAMPLES; s++){

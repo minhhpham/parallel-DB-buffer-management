@@ -115,8 +115,8 @@ int main(int argc, char const *argv[])
 	Nthreads = 9951;
 	Metrics_t metrics;
 	printf("T,N,A,Average_steps,Average_Max_Warp,Time(ms)\n");
-	for (AvailablePages=10000; AvailablePages<=100000; AvailablePages+=30000){
-		int N_SAMPLES = 100; // take average across 100 samples
+	for (AvailablePages=4190000; AvailablePages<=4190000; AvailablePages+=10000){
+		int N_SAMPLES = 1; // take average across 100 samples
 		metrics.avgStep = 0; metrics.avgMaxWarp = 0; metrics.runTime = 0;
 		Metrics_t metrics_1;
 		for (int s=0; s<N_SAMPLES; s++){

@@ -30,27 +30,22 @@ __global__ void RandomWalk_BM_get1page_kernel(int Nthreads, int *d_step_counts){
  */
 Metrics_t runRandomWalk_BM(int Nthreads, int NFree){
 	// allocate metrics array on host
-	int *h_step_counts = (int*)malloc(10000*sizeof(int));
+	int *h_step_counts = (int*)malloc(30000*sizeof(int));
 	// allocate metrics array on gpu
 	int *d_step_counts;
-	gpuErrchk( cudaMalloc((void**)&d_step_counts, 10000*sizeof(int)) );
+	gpuErrchk( cudaMalloc((void**)&d_step_counts, 30000*sizeof(int)) );
 
 	// run kernel until get to NFree
 	resetBufferRandomWalk_BM();
-	// printNumPagesLeftRandomWalk_BM();
+	printNumPagesLeftRandomWalk_BM();
 	int NGets = TOTAL_N_PAGES - NFree;
-	for (int i=0; i<(NGets/5000); i++){
-		RandomWalk_BM_get1page_kernel <<< ceil((float)5000/32), 32 >>> (5000, 0);
+	for (int i=0; i<(NGets/1000000); i++){
+		RandomWalk_BM_get1page_kernel <<< ceil((float)1000000/32), 32 >>> (1000000, 0);
 		gpuErrchk( cudaPeekAtLastError() );
 		gpuErrchk( cudaDeviceSynchronize() );
-// printNumPagesLeftRandomWalk_BM();
+		printNumPagesLeftRandomWalk_BM();
 	}
-	// printNumPagesLeftRandomWalk_BM();
-	for (int i=0; i<(NGets-(NGets/5000)*5000)/1000; i++){
-		RandomWalk_BM_get1page_kernel <<< ceil((float)1000/32), 32 >>> (1000, 0);
-		gpuErrchk( cudaPeekAtLastError() );
-		gpuErrchk( cudaDeviceSynchronize() );
-	}
+
 
 	// printNumPagesLeftRandomWalk_BM();
 	// execute kernel;
@@ -116,23 +111,24 @@ int main(int argc, char const *argv[])
 	Nthreads = 9951;
 	Metrics_t metrics;
 	printf("T,N,A,Average_steps,Average_Max_Warp,Time(ms)\n");
-	for (AvailablePages=10000; AvailablePages<=100000; AvailablePages+=30000){
-		int N_SAMPLES = 100; // take average across 100 samples
-		metrics.avgStep = 0; metrics.avgMaxWarp = 0; metrics.runTime = 0;
-		Metrics_t metrics_1;
-		for (int s=0; s<N_SAMPLES; s++){
-			// run kernel to get 1 page for each thread
-			metrics_1 = runRandomWalk_BM(Nthreads, AvailablePages);
-			metrics.avgStep += metrics_1.avgStep;
-			metrics.avgMaxWarp += metrics_1.avgMaxWarp;
-			metrics.runTime += metrics_1.runTime;
-		}
-		metrics.avgStep /= N_SAMPLES;
-		metrics.avgMaxWarp /= N_SAMPLES;
-		metrics.runTime /= N_SAMPLES;
-		// print results to stdout
-		printf("%d,%d,%d,%f,%f,%f\n", TOTAL_N_PAGES, Nthreads, AvailablePages, metrics.avgStep, metrics.avgMaxWarp, metrics.runTime);
-	}	
-
+	for (Nthreads=1000; Nthreads<=30000; Nthreads+=1000){
+		for (AvailablePages=419000; AvailablePages<=419000; AvailablePages+=30000){
+			int N_SAMPLES = 1; // take average across 100 samples
+			metrics.avgStep = 0; metrics.avgMaxWarp = 0; metrics.runTime = 0;
+			Metrics_t metrics_1;
+			for (int s=0; s<N_SAMPLES; s++){
+				// run kernel to get 1 page for each thread
+				metrics_1 = runRandomWalk_BM(Nthreads, AvailablePages);
+				metrics.avgStep += metrics_1.avgStep;
+				metrics.avgMaxWarp += metrics_1.avgMaxWarp;
+				metrics.runTime += metrics_1.runTime;
+			}
+			metrics.avgStep /= N_SAMPLES;
+			metrics.avgMaxWarp /= N_SAMPLES;
+			metrics.runTime /= N_SAMPLES;
+			// print results to stdout
+			printf("%d,%d,%d,%f,%f,%f\n", TOTAL_N_PAGES, Nthreads, AvailablePages, metrics.avgStep, metrics.avgMaxWarp, metrics.runTime);
+		}	
+	}
 	return 0;
 }

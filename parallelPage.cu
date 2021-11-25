@@ -7,7 +7,8 @@
 
 namespace cg = cooperative_groups;
 
-#define GROUP_N_PAGES 100000   // group pages for faster initialization
+#define GROUP_N_PAGES 1000000   // group pages for faster initialization
+cudaStream_t bufferManagerStream; // stream for buffer manager
 
 /* actual pages for all strategies */
 __device__ void **d_page_groups;                                       // actual address to pages, (TOTAL_N_PAGES/GROUP_N_PAGES) groups, each with GROUP_N_PAGES pages
@@ -108,6 +109,9 @@ __device__ static inline int RNG_LCG(int seed){
 /* initialize TOTAL_N_PAGES pages on GPU's global memory, each page is PAGE_SIZE large
 also initialize the page map structure with all 0 (all free) */
 __host__ void initPagesRandomWalk(){
+	// init stream
+	cudaStreamCreate(&bufferManagerStream);
+
 	// initialize actual pages
 	initPages();
 
@@ -158,6 +162,10 @@ __device__ int getPageRandomWalk(int *stepCount){
 		seed = RNG_LCG(seed);
 		pageID = seed % TOTAL_N_PAGES;
 		step_count++;
+		if (step_count>TOTAL_N_PAGES/2){
+			printf("BUFFER MANAGER OUT OF PAGE !!!\n");
+			__trap();
+		}
 	}
 
 	// int pageID = tid*100;
@@ -179,9 +187,9 @@ __global__ void resetBufferRandomWalk_kernel(){
 }
 
 __host__ void resetBufferRandomWalk(){
-	resetBufferRandomWalk_kernel <<< 1, 1 >>> ();
+	resetBufferRandomWalk_kernel <<< 1, 1, 0, bufferManagerStream >>> ();
 	gpuErrchk( cudaPeekAtLastError() );
-	gpuErrchk( cudaDeviceSynchronize() );
+	gpuErrchk( cudaStreamSynchronize(bufferManagerStream) );
 }
 
 __global__ void printNumPagesLeftRandomWalk_kernel(){
@@ -193,9 +201,25 @@ __global__ void printNumPagesLeftRandomWalk_kernel(){
 }
 
 __host__ void printNumPagesLeftRandomWalk(){
-	printNumPagesLeftRandomWalk_kernel <<< 1, 1 >>> ();
+	printNumPagesLeftRandomWalk_kernel <<< 1, 1, 0, bufferManagerStream >>> ();
 	gpuErrchk( cudaPeekAtLastError() );
-	gpuErrchk( cudaDeviceSynchronize() );
+	gpuErrchk( cudaStreamSynchronize(bufferManagerStream) );
+}
+
+__global__ void monitorBufferRandomWalk_kernel(int msGap, int maxCount){
+	unsigned nsGap = msGap * 1000000;
+	for (int i=0; i<maxCount; i++){
+		int countFree = 0;
+		for (int i=0; i<TOTAL_N_PAGES; i++){
+			if (d_PageMapRandomWalk[i]==0) countFree++;
+		}
+		printf("[RW info] Number of free pages: %d, percentage free: %2.1f % \n", countFree, (float)countFree/TOTAL_N_PAGES*100);
+		__nanosleep(nsGap);
+	}
+}
+
+__host__ void monitorBufferRandomWalk(int msGap, int maxCount){
+	monitorBufferRandomWalk_kernel <<< 1, 1, 0, bufferManagerStream >>> (msGap, maxCount);
 }
 
 /* CLUSTERED RANDOM WALK IMPLEMENTATION */
@@ -791,6 +815,7 @@ static inline __device__ int calculateFlipMask(int groupValue, int NBits){
 	// helper function for getPageCollabRW_BM
 	int flipMask = 0;
 	int count = 0;
+	#pragma unroll
 	for (int i=0; i<32; i++){	// loop thru bits
 		if (count==NBits)
 			break;
@@ -839,7 +864,6 @@ __device__ int getPageCollabRW_BM(int *stepCount){
 		unsigned groupID = (unsigned)seed % (BITMAP_LENGTH-32);
 		// increment by laneID to get the position of the integer this thread will read
 		groupID += laneID;
-// if (blockIdx.x==0) printf("t %d, s %d\n", threadIdx.x, groupID);
 		if (d_pageMapCollabRW_BM[groupID]!=0xffffffff){
 			// Try to lock the integer
 			volatile int lock = atomicExch(&d_mapLockCollabRW_BM[groupID], 1);
@@ -898,23 +922,94 @@ __device__ int getPageCollabRW_BM(int *stepCount){
 	return pageID;
 }
 
+
+static inline __device__ void releasePages(int pageID, int nPages){
+	// release nPages starting from pageID. They all should belong to the same bit group
+	int groupID = pageID/32;
+	int bitPosition = pageID - groupID*32;
+	int flipMask = ~(((1<<nPages)-1)<<bitPosition);
+	atomicAnd(&d_pageMapCollabRW_BM[groupID], flipMask);
+}
+
+__device__ int getXPageCollabRW_BM(int X, int *step_count){
+	const int callerMask = __activemask();
+	int neederMask = callerMask;
+	int laneID = threadIdx.x%32+1;
+	int leaderLaneID = __ffs(callerMask);
+	int seed = (int)(blockIdx.x<<15) + ((int16_t)clock());
+	int outPageID = 0;
+
+	int pageID=-1, nPages=0; // n consecutive pages starting from pageID
+	__shared__ int S_pageID[1];	// for sharing pageID
+	while (neederMask){
+		if (laneID==leaderLaneID) S_pageID[0] = -1;
+		__syncwarp(callerMask);
+		int targetLaneID = __ffs(neederMask);
+		int targetX = __shfl_sync(callerMask, X, targetLaneID-1);
+		int SMRes;
+		if (pageID!=-1 && nPages>=targetX)
+			SMRes = atomicExch(&S_pageID[0], pageID);
+		__syncwarp(callerMask);
+		if (pageID!=-1 && pageID==S_pageID[0])
+			pageID = -1;
+		if (S_pageID[0]!=-1){
+			neederMask &= ~(1<<(targetLaneID-1));	// pop the bit at targetLaneID
+			if (laneID==targetLaneID) outPageID = S_pageID[0];
+			continue;
+		}
+		// if we get here, we need to do random walk
+		// rng, force groupID to be between 0 and BITMAP_LENGTH-32
+		seed = RNG_LCG(seed);
+		unsigned groupID = (unsigned)seed % (BITMAP_LENGTH-32) + laneID;
+		// check the 32 bits at groupID
+		int groupValue = d_pageMapCollabRW_BM[groupID];
+		if (__popc(~groupValue)>=targetX){
+			int flipMask = calculateFlipMask(groupValue, targetX);
+			// Flip the bits as we determined above
+			int res = atomicOr(&d_pageMapCollabRW_BM[groupID], flipMask);
+			if (res!=groupValue){
+				// fail, undo atomicOr
+				atomicAnd(&d_pageMapCollabRW_BM[groupID], ~((groupValue|flipMask)^res) );
+			} else {
+				// success
+				// release pageID that this thread is holding 
+				if (pageID!=-1){
+					// release
+					releasePages(pageID, nPages);
+				}
+				pageID = groupID*32 + __ffs(flipMask)-1;
+				nPages = targetX;
+			}
+		}
+	}
+
+	// free pages that this thread is holding that's not being used
+	if (pageID!=-1)
+		// release
+		releasePages(pageID, nPages);
+	return outPageID;
+}
+
+
+
 /*
     - compute groupID = pageID/32
     - compute bit position = pageID - groupID*32
     - navigate to groupID location and flip the bit position to 0
  */
 __device__ void freePageCollabRW_BM(int pageID){
-	int groupID = pageID/32;
-	int bitPosition = pageID - groupID*32;
-	volatile int lock = 1;
-	while (lock){
-		// try to grab lock
-		lock = atomicExch(&d_mapLockCollabRW_BM[groupID], 1);
-		if (!lock) // got the lock
-			d_pageMapCollabRW_BM[groupID] &= ~(1<<bitPosition);
-		if (!lock) // release lock
-			atomicExch(&d_mapLockCollabRW_BM[groupID], 0);
-	}
+	// int groupID = pageID/32;
+	// int bitPosition = pageID - groupID*32;
+	// volatile int lock = 1;
+	// while (lock){
+	// 	// try to grab lock
+	// 	lock = atomicExch(&d_mapLockCollabRW_BM[groupID], 1);
+	// 	if (!lock) // got the lock
+	// 		d_pageMapCollabRW_BM[groupID] &= ~(1<<bitPosition);
+	// 	if (!lock) // release lock
+	// 		atomicExch(&d_mapLockCollabRW_BM[groupID], 0);
+	// }
+	releasePages(pageID, 1);
 }
 
 
@@ -968,7 +1063,6 @@ __host__ void initPagesRandomWalk_BM(){
 
 
 // if step_count is not null, write step count to it
-// BITMAP_LENGTH = 32
 __device__ int getPageRandomWalk_BM(int *stepCount){
 	int tid = blockIdx.x*blockDim.x + threadIdx.x;
 	int16_t Clock = (int16_t)clock();
@@ -1008,7 +1102,7 @@ __device__ int getPageRandomWalk_BM(int *stepCount){
 
 // In this implementation, X is at most 32
 __device__ int getXPageRandomWalk_BM(int X, int *stepCount){
-	if (X<1 || X>32){printf("invalid number of page requested \n"); __trap();}
+	if (X<1 || X>32){printf("invalid number of consecutive page requested: %d \n", X); __trap();}
 	int tid = blockIdx.x*blockDim.x + threadIdx.x;
 	int16_t Clock = (int16_t)clock();
 	int seed = (tid<<15) + Clock;
@@ -1032,7 +1126,7 @@ __device__ int getXPageRandomWalk_BM(int X, int *stepCount){
 			if ((result & bitMaskXBits_shifted) == 0){
 				// we flipped the bit
 				// calculate the corresponding first pageID of these X consecutive pages
-				pageID = groupID<<5 + bitPosition;
+				pageID = groupID*32 + bitPosition;
 				foundPage = true;
 				break; // break the inner while loop
 			} else {

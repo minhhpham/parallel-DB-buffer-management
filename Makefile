@@ -1,17 +1,24 @@
 MAKEFLAGS += -j9
 NVCC=		nvcc
-NVCC_OPTIM_FLAGS= --device-c -arch=sm_70
+NVCC_OPTIM_FLAGS= --device-c -arch=sm_70 -rdc=true -lcudadevrt --ptxas-options=-v
 NVCC_DEBUG_FLAGS= -g -G -O0 --device-c -arch=sm_70
 ifeq ($(debug), 1)
 	NVCC_FLAGS = $(NVCC_DEBUG_FLAGS)
 else
 	NVCC_FLAGS = $(NVCC_OPTIM_FLAGS)
 endif
+NVCC_LINK_FLAG = -arch=sm_70 --default-stream per-thread
 
-all: unitTestRandomWalk unitTestClusteredRandomWalk unitTestLinkedList unitTestRandomWalk2 unitTestClusteredRandomWalk2 unitTestLinkedList0 unitTestSingleClock0 unitTestDistClock0 unitTestSingleClock1 unitTestDistClock1 unitTestCollabRW unitTestCollabRW_BM unitTestRandomWalk_BM unitTestClusteredRandomWalk_BM unitTestMalloc
+all: memoryInitTest unitTestRandomWalk unitTestClusteredRandomWalk unitTestLinkedList unitTestRandomWalk2 unitTestClusteredRandomWalk2 unitTestLinkedList0 unitTestSingleClock0 unitTestDistClock0 unitTestSingleClock1 unitTestDistClock1 unitTestCollabRW unitTestCollabRW_BM unitTestRandomWalk_BM unitTestClusteredRandomWalk_BM unitTestMalloc1 unitTestMalloc2 
 
 parallelPage.o: parallelPage.cuh parallelPage.cu
-	nvcc $(NVCC_FLAGS) -rdc=true -lcudadevrt parallelPage.cu -o parallelPage.o
+	nvcc $(NVCC_FLAGS) parallelPage.cu -o parallelPage.o
+
+memoryInitTest.o: memoryInitTest.cu
+	nvcc $(NVCC_FLAGS) memoryInitTest.cu -o memoryInitTest.o
+
+memoryInitTest: memoryInitTest.o parallelPage.o
+	nvcc $(NVCC_LINK_FLAG) memoryInitTest.o parallelPage.o -o memoryInitTest
 
 unitTestRandomWalk.o: parallelPage.o unitTestRandomWalk.cu metrics.h
 	nvcc $(NVCC_FLAGS) unitTestRandomWalk.cu -o unitTestRandomWalk.o
@@ -84,7 +91,7 @@ unitTestCollabRW: unitTestCollabRW.o parallelPage.o
 	nvcc -arch=sm_70 parallelPage.o unitTestCollabRW.o -o unitTestCollabRW
 
 unitTestCollabRW_BM.o: parallelPage.o unitTestCollabRW_BM.cu
-	nvcc $(NVCC_FLAGS) unitTestCollabRW_BM.cu -o unitTestCollabRW_BM.o
+	nvcc $(NVCC_FLAGS) unitTestCollabRW_BM.cu -o unitTestCollabRW_BM.o 
 
 unitTestCollabRW_BM: unitTestCollabRW_BM.o parallelPage.o
 	nvcc -arch=sm_70 parallelPage.o unitTestCollabRW_BM.o -o unitTestCollabRW_BM
@@ -104,12 +111,17 @@ unitTestClusteredRandomWalk_BM: unitTestClusteredRandomWalk_BM.o parallelPage.o
 malloc.o: parallelPage.o malloc.cuh malloc.cu
 	nvcc $(NVCC_FLAGS) -rdc=true -lcudadevrt malloc.cu -o malloc.o	
 
-unitTestMalloc.o: unitTestMalloc.cu
-	nvcc $(NVCC_FLAGS) -rdc=true -lcudadevrt unitTestMalloc.cu -o unitTestMalloc.o --ptxas-options=-v
+unitTestMalloc1.o: unitTestMalloc1.cu
+	nvcc $(NVCC_FLAGS) -rdc=true -lcudadevrt unitTestMalloc1.cu -o unitTestMalloc1.o 
 
-unitTestMalloc: parallelPage.o malloc.o unitTestMalloc.o
-	nvcc -arch=sm_70 parallelPage.o malloc.o unitTestMalloc.o -o unitTestMalloc
+unitTestMalloc1: parallelPage.o malloc.o unitTestMalloc1.o
+	nvcc -arch=sm_70 parallelPage.o malloc.o unitTestMalloc1.o -o unitTestMalloc1
 
+unitTestMalloc2.o: unitTestMalloc2.cu
+	nvcc $(NVCC_FLAGS) -rdc=true -lcudadevrt unitTestMalloc2.cu -o unitTestMalloc2.o 
+
+unitTestMalloc2: parallelPage.o malloc.o unitTestMalloc2.o
+	nvcc -arch=sm_70 parallelPage.o malloc.o unitTestMalloc2.o -o unitTestMalloc2
 
 
 # unitTestRandomWalk: libParallelPage.cuh unitTestRandomWalk.cu
@@ -123,6 +135,6 @@ unitTestMalloc: parallelPage.o malloc.o unitTestMalloc.o
 
 .PHONY: test debug clean
 clean:
-	rm -f *.o *.a unitTestRandomWalk unitTestClusteredRandomWalk unitTestLinkedList unitTestRandomWalk2 unitTestClusteredRandomWalk2 unitTestLinkedList0 unitTestSingleClock0 unitTestDistClock0 unitTestSingleClock1 unitTestDistClock1 unitTestCollabRW unitTestCollabRW_BM unitTestRandomWalk_BM unitTestClusteredRandomWalk_BM unitTestMalloc
+	rm -f *.o *.a unitTestRandomWalk unitTestClusteredRandomWalk unitTestLinkedList unitTestRandomWalk2 unitTestClusteredRandomWalk2 unitTestLinkedList0 unitTestSingleClock0 unitTestDistClock0 unitTestSingleClock1 unitTestDistClock1 unitTestCollabRW unitTestCollabRW_BM unitTestRandomWalk_BM unitTestClusteredRandomWalk_BM unitTestMalloc1 memoryInitTest unitTestMalloc2
 debug:
-	make clean && make -j10 debug=1 && CUDA_VISIBLE_DEVICES=0 cuda-gdb unitTestRandomWalk_BM
+	make clean && make -j10 debug=1 && CUDA_VISIBLE_DEVICES=0 cuda-gdb unitTestMalloc1
