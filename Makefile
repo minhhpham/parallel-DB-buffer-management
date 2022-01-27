@@ -1,24 +1,36 @@
-MAKEFLAGS += -j9
+MAKEFLAGS+= -j9
 NVCC=		nvcc
 NVCC_OPTIM_FLAGS= --device-c -arch=sm_70 -rdc=true -lcudadevrt --ptxas-options=-v
 NVCC_DEBUG_FLAGS= -g -G -O0 --device-c -arch=sm_70
+BINDIR= 	bin
+SOURCEDIR=	source
+TESTDIR=	unitTests
+
+PROG=memoryInitTest unitTest1
+BINLIST=$(addprefix $(BINDIR)/, $(PROG))
+
 ifeq ($(debug), 1)
 	NVCC_FLAGS = $(NVCC_DEBUG_FLAGS)
+	NVCC_LINK_FLAG = -arch=sm_70 -O0 -g -G -lcudadevrt --ptxas-options=-v
 else
 	NVCC_FLAGS = $(NVCC_OPTIM_FLAGS)
+	NVCC_LINK_FLAG = -arch=sm_70 -O4 -lcudadevrt --ptxas-options=-v
 endif
-NVCC_LINK_FLAG = -arch=sm_70 --default-stream per-thread
 
-all: memoryInitTest unitTestRandomWalk unitTestClusteredRandomWalk unitTestLinkedList unitTestRandomWalk2 unitTestClusteredRandomWalk2 unitTestLinkedList0 unitTestSingleClock0 unitTestDistClock0 unitTestSingleClock1 unitTestDistClock1 unitTestCollabRW unitTestCollabRW_BM unitTestRandomWalk_BM unitTestClusteredRandomWalk_BM unitTestMalloc1 unitTestMalloc2 
+all: $(BINDIR) $(BINLIST)
+
+$(BINDIR):
+	mkdir $(BINDIR)
+
+$(BINDIR)/%:  $(TESTDIR)/%.cu $(SOURCEDIR)/Paging.cuh
+	$(NVCC) $< -o $@ $(NVCC_LINK_FLAG)
+
 
 parallelPage.o: parallelPage.cuh parallelPage.cu
 	nvcc $(NVCC_FLAGS) parallelPage.cu -o parallelPage.o
 
-memoryInitTest.o: memoryInitTest.cu
-	nvcc $(NVCC_FLAGS) memoryInitTest.cu -o memoryInitTest.o
-
-memoryInitTest: memoryInitTest.o parallelPage.o
-	nvcc $(NVCC_LINK_FLAG) memoryInitTest.o parallelPage.o -o memoryInitTest
+memoryInitTest: unitTests/memoryInitTest.cu source/Paging.cuh
+	nvcc $(NVCC_LINK_FLAG) unitTests/memoryInitTest.cu -o memoryInitTest
 
 unitTestRandomWalk.o: parallelPage.o unitTestRandomWalk.cu metrics.h
 	nvcc $(NVCC_FLAGS) unitTestRandomWalk.cu -o unitTestRandomWalk.o
@@ -135,6 +147,6 @@ unitTestMalloc2: parallelPage.o malloc.o unitTestMalloc2.o
 
 .PHONY: test debug clean
 clean:
-	rm -f *.o *.a unitTestRandomWalk unitTestClusteredRandomWalk unitTestLinkedList unitTestRandomWalk2 unitTestClusteredRandomWalk2 unitTestLinkedList0 unitTestSingleClock0 unitTestDistClock0 unitTestSingleClock1 unitTestDistClock1 unitTestCollabRW unitTestCollabRW_BM unitTestRandomWalk_BM unitTestClusteredRandomWalk_BM unitTestMalloc1 memoryInitTest unitTestMalloc2
+	rm -f bin/*
 debug:
-	make clean && make -j10 debug=1 && CUDA_VISIBLE_DEVICES=0 cuda-gdb unitTestMalloc1
+	make clean && make -j10 debug=1 && CUDA_VISIBLE_DEVICES=0 cuda-gdb bin/unitTest1

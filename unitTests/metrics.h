@@ -1,3 +1,6 @@
+#ifndef METRICS_H
+#define METRICS_h
+
 typedef struct 
 {
 	float avgStep;
@@ -5,7 +8,8 @@ typedef struct
 	float runTime;	// in ms
 } Metrics_t;
 
-/* step_counts; array of step counts for each thread */
+/* aggregate metrics from a kernel run with Nthreads
+	step_counts; array of step counts for each thread */
 static inline Metrics_t aggregate_metrics(int *step_counts, int Nthreads){
 	// for (int i=0; i<Nthreads; i++) printf("%d, %d\n", i, step_counts[i]);
 	Metrics_t out;
@@ -27,3 +31,21 @@ static inline Metrics_t aggregate_metrics(int *step_counts, int Nthreads){
 	out.avgMaxWarp = (float)Sum_MaxWarp/Nwarps;	
 	return out;
 }
+
+
+/* taking a sample average on metrics
+ */
+static inline Metrics_t sample_average(Metrics_t *metrics_arr, int len){
+	Metrics_t output;
+	output.avgStep = 0; output.avgMaxWarp = 0; output.runTime = 0;
+	for (int k=0; k<len; k++){
+		output.avgStep += metrics_arr[k].avgStep/len;
+		output.avgMaxWarp += metrics_arr[k].avgMaxWarp/len;
+		output.runTime += metrics_arr[k].runTime/len;
+	}
+	return output;
+}
+
+
+
+#endif

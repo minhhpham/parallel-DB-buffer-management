@@ -3,3 +3,4 @@ unitTestLinkedList
 unitTestRandomWalk
 unitTestClusteredRandomWalk
 out
+.vscode*
