@@ -75,16 +75,16 @@ __device__ void freePage(int pageID){
 
 
 
-static inline __device__ int fbs(int x, int b){
-	// find bth bit set on x, first bit is 1, last bit is 32
-	// return 0 if x==0
-	if (x==0) return 0;
+static inline __device__ int fks(int x, int k){
+	// find kth bit set on x, first bit is 1, last bit is 32
+	// return 0 if x==0 or there are less than k set bit
+    if (__popc(x)<k) return 0;
 	int left, right;
 	left = 1, right = 32;
 	while (left<right){
 		int mid = (left+right)/2;
 		int count = __popc( ((1<<mid)-1) & x ); // count number of bits from bit 1 to bit mid
-		if (count<x) left = mid + 1;
+		if (count<k) left = mid + 1;
 		else right = mid;
 	}
 	return left;
@@ -119,14 +119,15 @@ __device__ int getPage(int *stepCount){
 	int laneID = threadIdx.x%32;
 	int pageID_out = -1;
 	while (needMask){
+		step_count++;
 		seed = RNG_LCG(seed);
 		unsigned p = (unsigned)seed % Bitmap_length_d; // groupID
 		int r = atomicExch(&d_PageMapRandomWalk_BM[p], 0xFFFFFFFF);
 		r = ~r;
 		int hasMask = __ballot_sync(mask, r!=0);
 		while (needMask && hasMask){
-			int b = __popc( ~(0xFFFFFFFF<<laneID) & needMask );
-			int sourceLaneID = fbs(hasMask, b+1)-1;
+			int s = __popc( ~(0xFFFFFFFF<<laneID) & needMask );
+			int sourceLaneID = fks(hasMask, s+1)-1;
 			int foundPageID = p*32 + __ffs(r)-1;
 			int pageID = __shfl_sync(mask, foundPageID, sourceLaneID);
 			if (sourceLaneID!=-1)
@@ -140,7 +141,7 @@ __device__ int getPage(int *stepCount){
 		if (needMask==0 && r)
 			releasePagesBase(p, __ffs(r)-1, __popc(r));
 	}
-	
+	if (stepCount) *stepCount = step_count;
 	return pageID_out;
 }
 

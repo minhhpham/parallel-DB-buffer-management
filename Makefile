@@ -6,7 +6,7 @@ BINDIR= 	bin
 SOURCEDIR=	source
 TESTDIR=	unitTests
 
-PROG=memoryInitTest unitTest1
+PROG=memoryInitTest unitTest1 unitTest2
 BINLIST=$(addprefix $(BINDIR)/, $(PROG))
 
 ifeq ($(debug), 1)
@@ -149,4 +149,4 @@ unitTestMalloc2: parallelPage.o malloc.o unitTestMalloc2.o
 clean:
 	rm -f bin/*
 debug:
-	make clean && make -j10 debug=1 && CUDA_VISIBLE_DEVICES=0 cuda-gdb bin/unitTest1
+	make clean && make -j10 debug=1 && CUDA_VISIBLE_DEVICES=0 cuda-gdb bin/unitTest2
