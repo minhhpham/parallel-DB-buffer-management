@@ -130,7 +130,7 @@ __device__ int getPage(int *stepCount){
 			int sourceLaneID = fks(hasMask, s+1)-1;
 			int foundPageID = p*32 + __ffs(r)-1;
 			int pageID = __shfl_sync(mask, foundPageID, sourceLaneID);
-			if (sourceLaneID!=-1)
+			if (pageID_out==-1 && sourceLaneID!=-1)
 				pageID_out = pageID;
 			// update needmask and hasmask
 			r &= ~(1<<(__ffs(r)-1)) ;

@@ -11,14 +11,14 @@
 
 
 /* ---------------------- declaration and usage ----------------------------------------------------------------- */
-extern __device__ void *pageAddress(int pageID);    // return pointer to start of a page given pageID
-extern __host__ void initMemoryManagement(int nPages=TOTAL_N_PAGES_DEFAULT, int pageSize=PAGE_SIZE_DEFAULT);    // initialize the memory management system
-extern __device__ int getPage(int *stepCount=0);
-extern __device__ int getNPage(int n, int *stepCount=0);	// get n consecutive pages
-extern __device__ void freePage(int pageID);
-extern __host__ float getFreePagePercentage();
-extern __host__ void resetMemoryManager();          // free all pages and reset meta data
-
+__host__ void initMemoryManagement(int nPages=TOTAL_N_PAGES_DEFAULT, int pageSize=PAGE_SIZE_DEFAULT);    // initialize the memory management system
+__host__ float getFreePagePercentage();
+__host__ void resetMemoryManager();          // free all pages and reset meta data
+__device__ void *pageAddress(int pageID);    // return pointer to start of a page given pageID
+__device__ int getPage(int *stepCount=0);
+__device__ int getNPage(int n, int *stepCount=0);	// get n consecutive pages
+__device__ void freePage(int pageID);
+__device__ void *mallocRW(size_t size);    // malloc
 
 
 /* -------------------------- definitions -------------------------------------------------- */
@@ -131,7 +131,7 @@ __device__ int getPage(int *stepCount){
             int sourceLaneID = fks(hasMask, s+1)-1;
             int foundPageID = p*32 + __ffs(r)-1;
             int pageID = __shfl_sync(mask, foundPageID, sourceLaneID);
-            if (sourceLaneID!=-1)
+            if (pageID_out==-1 && sourceLaneID!=-1)
                 pageID_out = pageID;
             // update needmask and hasmask
             r &= ~(1<<(__ffs(r)-1)) ;
@@ -223,21 +223,20 @@ extern __device__ int getNPage(int n, int *stepCount){
                 if ( (hasMask&(1<<t)) == 0 ) continue;
                 int range = makeRange(startRange, lenRange);
                 range = __shfl_sync(mask, range, t);
-                lenRange = getLen(range);
-                bool take = (pageID_out==-1 && lenRange>=n) ? true : false;
+                int lenRange1 = getLen(range);
+                bool take = (pageID_out==-1 && lenRange1>=n) ? true : false;
                 int takeMask = __ballot_sync(mask, (int)take);
                 if (laneID==__ffs(takeMask)-1){
                     // now we can grab pages
-                    startRange = getStart(range);
-                    int atomicMask = (~(0xFFFFFFFF<<n))<<startRange;
+                    int startRange1 = getStart(range);
+                    int atomicMask = (~(0xFFFFFFFF<<n))<<startRange1;
                     p = ((unsigned)seed+t) % Bitmap_length_d;
                     int res = atomicOr(&d_PageMapRandomWalk_BM[p], atomicMask);
-                    if ((res&atomicMask)==0) pageID_out = p*32 + startRange;
+                    if ((res&atomicMask)==0) pageID_out = p*32 + startRange1;
                 }
             }
             // recalculate needMask and hasMask
             needMask = __ballot_sync(mask, pageID_out==-1);
-            if (needMask==0) break;
             lenRange = find0Range(&P, &startRange);
             hasMask = __ballot_sync(mask, lenRange>0);
         }
