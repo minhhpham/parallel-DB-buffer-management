@@ -48,4 +48,30 @@ static inline Metrics_t sample_average(Metrics_t *metrics_arr, int len){
 
 
 
+/* kernel wall timing */ 
+struct KernelTiming{
+	cudaEvent_t start, stop;
+
+	void startKernelTiming(){
+		cudaEventCreate(&start);
+		cudaEventCreate(&stop);
+		cudaEventRecord(start, 0);
+	}
+
+	float stopKernelTiming(){
+		cudaEventRecord(stop, 0);
+		cudaEventSynchronize(stop);
+		float time;
+		cudaEventElapsedTime(&time, start, stop);
+		cudaEventDestroy(start);
+		cudaEventDestroy(stop);
+		return time;
+	}
+};
+
+
+
+
+
+
 #endif

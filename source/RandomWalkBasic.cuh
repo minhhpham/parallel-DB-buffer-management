@@ -13,7 +13,7 @@
 
 /* ---------------------- declaration and usage ----------------------------------------------------------------- */
 extern __device__ void *pageAddress(int pageID);    // return pointer to start of a page given pageID
-extern __host__ void initMemoryManagement(int nPages=TOTAL_N_PAGES_DEFAULT, int pageSize=PAGE_SIZE_DEFAULT);    // initialize the memory management system
+extern __host__ void initMemoryManagement(int nGB=TOTAL_SIZE_GB_DEFAULT, int pageSize=PAGE_SIZE_DEFAULT);    // initialize the memory management system
 extern __device__ int getPage(int *step_count=0);
 extern __device__ void freePage(int pageID);
 extern __host__ float getFreePagePercentage();
@@ -34,15 +34,15 @@ static int *d_PageMapRandomWalkBasic_h;   // same pointer on host access
     - initialize memory management's metadata
     - set all memory free
  */
-__host__ void initMemoryManagement(int nPages, int pageSize){
+__host__ void initMemoryManagement(int nGB, int pageSize){
     // initialize actual pages
-    initPages(nPages, pageSize);
+    initPages(nGB, pageSize);
     // initialize metadata (page map)
-    gpuErrchk( cudaMalloc((void**)&d_PageMapRandomWalkBasic_h, nPages*sizeof(int)) );
+    gpuErrchk( cudaMalloc((void**)&d_PageMapRandomWalkBasic_h, h_total_n_pages*sizeof(int)) );
     // copy to the global variable on device
     gpuErrchk( cudaMemcpyToSymbol(d_PageMapRandomWalkBasic, &d_PageMapRandomWalkBasic_h, sizeof(int*)) );
     // set all memory free
-    gpuErrchk( cudaMemset(d_PageMapRandomWalkBasic_h, 0, nPages*sizeof(int)) );
+    gpuErrchk( cudaMemset(d_PageMapRandomWalkBasic_h, 0, h_total_n_pages*sizeof(int)) );
 }
 
 

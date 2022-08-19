@@ -12,7 +12,7 @@
 
 /* ---------------------- declaration and usage ----------------------------------------------------------------- */
 extern __device__ void *pageAddress(int pageID);    // return pointer to start of a page given pageID
-extern __host__ void initMemoryManagement(int nPages=TOTAL_N_PAGES_DEFAULT, int pageSize=PAGE_SIZE_DEFAULT);    // initialize the memory management system
+__host__ void initMemoryManagement(int nGB=TOTAL_SIZE_GB_DEFAULT, int pageSize=PAGE_SIZE_DEFAULT);    // initialize the memory management system
 extern __device__ int getPage(int *step_count=0);
 extern __device__ void freePage(int pageID);
 extern __host__ float getFreePagePercentage();
@@ -37,12 +37,12 @@ static __device__ int Bitmap_length_d;
         - length (same value on host and device)
     - set all memory free
  */
-__host__ void initMemoryManagement(int nPages, int pageSize){
+__host__ void initMemoryManagement(int nGB, int pageSize){
     // initialize actual pages
-    initPages(nPages, pageSize);
+    initPages(nGB, pageSize);
     // initialize metadata (page map)
         // bitmap length
-    Bitmap_length = nPages/sizeof(int);
+    Bitmap_length = h_total_n_pages/sizeof(int)/8;
     gpuErrchk( cudaMemcpyToSymbol(Bitmap_length_d, &Bitmap_length, sizeof(int)) );
         // bitmap
     gpuErrchk( cudaMalloc((void**)&d_PageMapRandomWalk_BM_h, Bitmap_length*sizeof(int)) );
@@ -173,11 +173,11 @@ __host__ float getFreePagePercentage(){
     // first run to find memory requirement
     void *d_temp_storage = NULL;
     size_t temp_storage_bytes = 0;
-    cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_popc_out, d_sum, h_total_n_pages);
+    cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_popc_out, d_sum, Bitmap_length);
     // Allocate temporary storage
     gpuErrchk( cudaMalloc(&d_temp_storage, temp_storage_bytes) );
     // Run reduction
-    cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_popc_out, d_sum, h_total_n_pages);
+    cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_popc_out, d_sum, Bitmap_length);
     
     gpuErrchk( cudaPeekAtLastError() );
     gpuErrchk( cudaDeviceSynchronize() );

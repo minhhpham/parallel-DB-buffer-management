@@ -11,7 +11,7 @@
 
 
 /* ---------------------- declaration and usage ----------------------------------------------------------------- */
-__host__ void initMemoryManagement(int nPages=TOTAL_N_PAGES_DEFAULT, int pageSize=PAGE_SIZE_DEFAULT);    // initialize the memory management system
+__host__ void initMemoryManagement(int nGB=TOTAL_SIZE_GB_DEFAULT, int pageSize=PAGE_SIZE_DEFAULT);    // initialize the memory management system
 __host__ float getFreePagePercentage();
 __host__ void resetMemoryManager();          // free all pages and reset meta data
 __device__ void *pageAddress(int pageID);    // return pointer to start of a page given pageID
@@ -19,6 +19,7 @@ __device__ int getPage(int *stepCount=0);
 __device__ int getNPage(int n, int *stepCount=0);	// get n consecutive pages
 __device__ void freePage(int pageID);
 __device__ void *mallocRW(size_t size);    // malloc
+__device__ void freeRW(void *ptr);    // free
 
 
 /* -------------------------- definitions -------------------------------------------------- */
@@ -38,12 +39,12 @@ static __device__ int Bitmap_length_d;
         - length (same value on host and device)
     - set all memory free
  */
-__host__ void initMemoryManagement(int nPages, int pageSize){
+__host__ void initMemoryManagement(int nGB, int pageSize){
     // initialize actual pages
-    initPages(nPages, pageSize);
+    initPages(nGB, pageSize);
     // initialize metadata (page map)
         // bitmap length
-    Bitmap_length = nPages/sizeof(int);
+    Bitmap_length = h_total_n_pages/sizeof(int);
     gpuErrchk( cudaMemcpyToSymbol(Bitmap_length_d, &Bitmap_length, sizeof(int)) );
         // bitmap
     gpuErrchk( cudaMalloc((void**)&d_PageMapRandomWalk_BM_h, Bitmap_length*sizeof(int)) );
@@ -143,6 +144,7 @@ __device__ int getPage(int *stepCount){
             releasePagesBase(p, __ffs(r)-1, __popc(r));
     }
     if (stepCount) *stepCount = step_count;
+    // return pageID_out;
     return pageID_out;
 }
 
@@ -204,9 +206,9 @@ extern __device__ int getNPage(int n, int *stepCount){
     unsigned mask = __activemask();
     int seed = (tid<<15) + Clock;
     seed = __shfl_sync(mask, seed, __ffs(mask)-1);
-    int needMask = mask;
     unsigned laneID = threadIdx.x%32;
-    int pageID_out = -1;
+    int pageID_out = n>0 ? -1 : 0 ; // for coalesed requests in malloc
+    int needMask = __ballot_sync(mask, pageID_out==-1);
     int step_count = 0;
     while (needMask){
         step_count++;
@@ -242,7 +244,7 @@ extern __device__ int getNPage(int n, int *stepCount){
         }
     }
     if (stepCount) *stepCount = step_count;
-    return pageID_out;
+    return pageID_out % d_total_n_pages;
 }
 
 #undef OOM_THRESHOLD
@@ -274,11 +276,11 @@ __host__ float getFreePagePercentage(){
     // first run to find memory requirement
     void *d_temp_storage = NULL;
     size_t temp_storage_bytes = 0;
-    cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_popc_out, d_sum, h_total_n_pages);
+    cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_popc_out, d_sum, Bitmap_length);
     // Allocate temporary storage
     gpuErrchk( cudaMalloc(&d_temp_storage, temp_storage_bytes) );
     // Run reduction
-    cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_popc_out, d_sum, h_total_n_pages);
+    cub::DeviceReduce::Sum(d_temp_storage, temp_storage_bytes, d_popc_out, d_sum, Bitmap_length);
     
     gpuErrchk( cudaPeekAtLastError() );
     gpuErrchk( cudaDeviceSynchronize() );
@@ -289,6 +291,47 @@ __host__ float getFreePagePercentage(){
     return (float)(h_total_n_pages-h_sum)/h_total_n_pages;
 }
 
+/* 
+    group small requests to make a big malloc in a thread
+    return void *ptr
+    write number of pages to first 4 bytes before ptr
+ */
+__device__ void *mallocRW(size_t size){
+    size += sizeof(int);
+    __shared__ int S_small_req_sum[32];
+    int warpID = threadIdx.x/32;
+    int laneID = threadIdx.x%32;
+    int mask = __activemask();
+    int smallMask = __ballot_sync(mask, size<d_pageSize);
+    int smallLeaderID = __ffs(smallMask)-1;
+    bool smallMember = size<d_pageSize ? true : false;
+    bool leader = (size>=d_pageSize || laneID==smallLeaderID ) ? true : false ;
+    if (smallMember && leader)
+        S_small_req_sum[warpID] = 0;
+    __syncwarp();
+    int smallOffset;
+    if (smallMember)
+        smallOffset = atomicAdd(&S_small_req_sum[warpID], size);
+    int nPages_request = leader ? ceil((float)size/d_pageSize) : 0 ;
+    if (laneID==smallLeaderID) nPages_request = ceil((float)S_small_req_sum[warpID]/d_pageSize);
+    int pageID = getNPage(nPages_request);
+    if (smallMember)
+        pageID = __shfl_sync(smallMask, pageID, smallLeaderID);
+    int *ptr = (int*)pageAddress(pageID);
+    if (smallMember)
+        ptr = (int*)((char*)ptr + smallOffset);
+    // write number of pages to first 4 bytes
+    ptr[0] = nPages_request;
+    return (void*)((char*)ptr+sizeof(int));
+}
+
+
+__device__ void freeRW(void *ptr){
+    int *nPages = (int*)((char*)ptr - sizeof(int));
+    if (*nPages==0) return;
+    int pageID = getPageID(ptr);
+    releasePages(pageID, *nPages);
+}
 
 
 #endif

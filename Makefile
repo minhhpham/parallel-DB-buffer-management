@@ -6,15 +6,15 @@ BINDIR= 	bin
 SOURCEDIR=	source
 TESTDIR=	unitTests
 
-PROG=memoryInitTest unitTest1 unitTest2
+PROG=memoryInitTest unitTest1 unitTest1.5 unitTest2 unitTest3 unitTest4 collectPageData
 BINLIST=$(addprefix $(BINDIR)/, $(PROG))
 
 ifeq ($(debug), 1)
 	NVCC_FLAGS = $(NVCC_DEBUG_FLAGS)
-	NVCC_LINK_FLAG = -arch=sm_70 -O0 -g -G -lcudadevrt --ptxas-options=-v
+	NVCC_LINK_FLAG = -arch=sm_70 -O0 -g -G -lcudadevrt --ptxas-options=-v --compiler-options -Wall
 else
 	NVCC_FLAGS = $(NVCC_OPTIM_FLAGS)
-	NVCC_LINK_FLAG = -arch=sm_70 -O4 -lcudadevrt --ptxas-options=-v
+	NVCC_LINK_FLAG = -arch=sm_70 -O4 -lcudadevrt --ptxas-options=-v --compiler-options -Wall
 endif
 
 all: $(BINDIR) $(BINLIST)
@@ -135,6 +135,12 @@ unitTestMalloc2.o: unitTestMalloc2.cu
 unitTestMalloc2: parallelPage.o malloc.o unitTestMalloc2.o
 	nvcc -arch=sm_70 parallelPage.o malloc.o unitTestMalloc2.o -o unitTestMalloc2
 
+collectPageData.o: collectPageData.cu CollabRW_BM.cuh
+	nvcc $(NVCC_FLAGS) -rdc=true -lcudadevrt collectPageData.cu -o collectPageData.o 
+
+collectPageData: parallelPage.o collectPageData.o
+	nvcc -arch=sm_70 parallelPage.o collectPageData.o -o collectPageData
+
 
 # unitTestRandomWalk: libParallelPage.cuh unitTestRandomWalk.cu
 # 	nvcc unitTestRandomWalk.cu -o unitTestRandomWalk
@@ -149,4 +155,4 @@ unitTestMalloc2: parallelPage.o malloc.o unitTestMalloc2.o
 clean:
 	rm -f bin/*
 debug:
-	make clean && make -j10 debug=1 && CUDA_VISIBLE_DEVICES=0 cuda-gdb bin/unitTest2
+	make clean && make -j10 debug=1 && CUDA_VISIBLE_DEVICES=0 cuda-gdb bin/unitTest1.5

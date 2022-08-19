@@ -1,19 +1,20 @@
 /* 
-	perform one-page allocation, collect TAS, WAS, time
+	perform one-page allocation, save ptr on global mem, then free
+	measure and print time of free kernel
 	on a grid of Number of threads (N), percentage of available pages (A/T)
 	change source file on the first include file to change strategy. No other step is needed
  */
 
-#include "../source/CollabRW_BM.cuh"
+#include "../source/RandomWalkBasic.cuh"
 #include "metrics.h"
 #include <iostream>
 
 // define grid
-#define GRID_NTHREADS_LEN 2
-#define GRID_FREEPERC_LEN 5
+#define GRID_NTHREADS_LEN 21
+#define GRID_FREEPERC_LEN 1
 #define N_SAMPLES 30		// number of samples to measure metrics
-int GRID_NTHREADS[GRID_NTHREADS_LEN] = {10000, 100000};
-float GRID_FREEPERC[GRID_FREEPERC_LEN] = {0.9, 0.8, 0.7, 0.6, 0.1};
+int GRID_NTHREADS[GRID_NTHREADS_LEN] = {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288, 1048576};
+float GRID_FREEPERC[GRID_FREEPERC_LEN] = {1};
 
 
 /* Kernel to get 1 page with Random Walk, record step counts */
@@ -26,6 +27,22 @@ __global__ void get1page_kernel(int Nthreads, int *d_step_counts){
 		if (d_step_counts) d_step_counts[tid] = step_counts;
 	}
 }
+
+
+__global__ void getPage_kernel(int Nthreads, int *d_allocated_pageID){
+	int tid = blockIdx.x*blockDim.x + threadIdx.x;
+	if (tid<Nthreads)
+		d_allocated_pageID[tid] = getPage();
+}
+
+__global__ void freePage_kernel(int Nthreads, int *d_allocated_pageID){
+	int tid = blockIdx.x*blockDim.x + threadIdx.x;
+	if (tid<Nthreads){
+		int pageID = d_allocated_pageID[tid];
+		freePage(pageID);
+	}
+}
+
 
 /* make page requests until memory manager has exactly freePercentage */
 void fillMemory(float freePercentage){
@@ -51,28 +68,27 @@ Metrics_t measureMetrics(int Nthreads, float freePercentage){
 	// run kernel until get to desired free percentage
 	fillMemory(freePercentage);
 
-	// allocate metrics array on host
-	int *h_step_counts = (int*)malloc((1<<20)*sizeof(int));
-	// allocate metrics array on gpu
-	int *d_step_counts;
-	gpuErrchk( cudaMalloc((void**)&d_step_counts, (1<<20)*sizeof(int)) );
+	int *d_allocated_pageID;
+	gpuErrchk( cudaMalloc((void**)&d_allocated_pageID, (1<<20)*sizeof(int)) );
 
-	// execute kernel;
+	// execute get page kernel
+	getPage_kernel <<< ceil((float)Nthreads/32), 32 >>> (Nthreads, d_allocated_pageID);
+	gpuErrchk( cudaPeekAtLastError() );
+	gpuErrchk( cudaDeviceSynchronize() );
+
+	// execute free page kernel and  measure time
 	KernelTiming timing;
 	timing.startKernelTiming();
-	get1page_kernel <<< ceil((float)Nthreads/32), 32 >>> (Nthreads, d_step_counts);
+	freePage_kernel <<< ceil((float)Nthreads/32), 32 >>> (Nthreads, d_allocated_pageID);
 	gpuErrchk( cudaPeekAtLastError() );
 	gpuErrchk( cudaDeviceSynchronize() );
 	float total_time = timing.stopKernelTiming();
 
-	// copy metrics to host
-	gpuErrchk( cudaMemcpy(h_step_counts, d_step_counts, Nthreads*sizeof(int), cudaMemcpyDeviceToHost) );
-
 	// aggregate metrics and return
-	Metrics_t out = aggregate_metrics(h_step_counts, Nthreads);
+	Metrics_t out;
 	out.runTime = total_time;
 
-	free(h_step_counts); cudaFree(d_step_counts);
+	cudaFree(d_allocated_pageID);
 	return out;
 }
 

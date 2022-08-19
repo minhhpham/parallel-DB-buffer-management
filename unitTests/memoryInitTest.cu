@@ -26,27 +26,30 @@ int main(int argc, char const *argv[])
 	initPages();
 	/* test reading and writing on all pages */
 	fprintf(stderr, "testing ... \n");
-	for (int pageID=0; pageID<TOTAL_N_PAGES_DEFAULT; pageID++){
+	for (unsigned pageID=0; pageID<(TOTAL_N_PAGES_DEFAULT); pageID++){
 		writeKernel <<< 1, 1 >>> (pageID);
+		gpuErrchk( cudaPeekAtLastError() );
+		gpuErrchk( cudaDeviceSynchronize() );
 		readKernel <<< 1, 1 >>> (pageID);
 		gpuErrchk( cudaPeekAtLastError() );
 		gpuErrchk( cudaDeviceSynchronize() );
 
 		// display progress
-		std::cerr << "[";
-		int barWidth = 70;
-		float progress = (float)pageID/TOTAL_N_PAGES_DEFAULT;
-		int pos = barWidth * progress;
-		for (int i = 0; i < barWidth; ++i) {
-			if (i < pos) std::cerr << "=";
-			else if (i == pos) std::cerr << ">";
-			else std::cerr << " ";
-		}
-		std::cerr << "] " << int(progress * 100.0) << " %\r";
+		float progress = (float)pageID/(TOTAL_N_PAGES_DEFAULT);
+		std::cerr << " %\r" << int(progress * 100.0);
+		// std::cerr << "[";
+		// int barWidth = 70;
+		// int pos = barWidth * progress;
+		// for (int i = 0; i < barWidth; ++i) {
+		// 	if (i < pos) std::cerr << "=";
+		// 	else if (i == pos) std::cerr << ">";
+		// 	else std::cerr << " ";
+		// }
+		// std::cerr << "] " << int(progress * 100.0) << " %\r";
 		std::cerr.flush();
 	}
 
-	fprintf(stderr, "done \n");
+	std::cerr << "\n done \n" ;
 
 	return 0;
 }

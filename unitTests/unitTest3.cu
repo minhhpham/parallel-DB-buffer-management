@@ -1,5 +1,5 @@
 /* 
-	perform n-page allocation
+	perform arbitrary size allocation (up to 16K)
 	on a grid of Number of threads (N), percentage of available pages (A/T)
 	change source file on the first include file to change strategy. No other step is needed
  */
@@ -10,7 +10,7 @@
 
 // define grid
 #define GRID_NTHREADS_LEN 2
-#define GRID_FREEPERC_LEN 1
+#define GRID_FREEPERC_LEN 3
 #define GRID_ALLOCSIZE_LEN 37
 #define N_SAMPLES 100		// number of samples to measure metrics
 int GRID_NTHREADS[GRID_NTHREADS_LEN] = {10000, 100000};
@@ -30,18 +30,10 @@ __global__ void get1page_kernel(int Nthreads, int *d_step_counts){
 }
 
 /* Kernel to get n pages with Random Walk, record step counts */
-__global__ void getNPage_kernel(int Nthreads, int *d_step_counts, int n){
+__global__ void malloc_kernel(int Nthreads, int *d_step_counts, int size){
 	int tid = blockIdx.x*blockDim.x + threadIdx.x;
-	if (n==0){
-		clock_t Clock = clock();
-		n = (unsigned)(Clock | threadIdx.x) % 32;
-	}
-	if (tid<Nthreads){
-		int step_counts;
-		int *tmp = d_step_counts? &step_counts : 0;
-		int pageID = getNPage(n, tmp);
-		if (d_step_counts) d_step_counts[tid] = step_counts;
-	}
+	if (tid<Nthreads)
+		void * ptr = mallocRW(size);
 }
 
 
@@ -67,7 +59,7 @@ void fillMemory(float freePercentage){
 			*avgMaxWarp:	average of Max of Warp across all warps
 			*runTime:		total run time (s)
  */
-Metrics_t measureMetrics(int Nthreads, float freePercentage, int n){
+Metrics_t measureMetrics(int Nthreads, float freePercentage, int size){
 	// run kernel until get to desired free percentage
 	fillMemory(freePercentage);
 
@@ -79,7 +71,8 @@ Metrics_t measureMetrics(int Nthreads, float freePercentage, int n){
 
 	// execute kernel;
 	KernelTiming timing;
-	timing.startKernelTiming();	getNPage_kernel <<< ceil((float)Nthreads/32), 32 >>> (Nthreads, d_step_counts, n);
+	timing.startKernelTiming();
+	malloc_kernel <<< ceil((float)Nthreads/32), 32 >>> (Nthreads, d_step_counts, size);
 	gpuErrchk( cudaPeekAtLastError() );
 	gpuErrchk( cudaDeviceSynchronize() );
 	float total_time = timing.stopKernelTiming();
@@ -101,14 +94,14 @@ int main(int argc, char const *argv[])
 	/* command descriptions */
 	if(argc>1 && ((strncmp(argv[1], "-h", 2) == 0) || (strncmp(argv[1], "-help", 4) == 0))){
 		fprintf(stderr, "USAGE: ./unitTest2 [options]\n");
-		fprintf(stderr, "OPTIONS: -n : number of pages allocated per thread (0 is random). Default 32 \n");
+		fprintf(stderr, "OPTIONS: -s : allocation size. Default 16 \n");
 		return 0;
 	}
 	/* parse options */
-	int nPages = 2;
+	int allocation_size = 16;
 	for (int i=0; i<argc; i++){
-		if(strncmp(argv[i], "-n", 2) == 0)
-			nPages = atoi(argv[i]);
+		if(strncmp(argv[i], "-s", 2) == 0)
+			allocation_size = atoi(argv[i]);
 	}
 
 
@@ -122,15 +115,15 @@ int main(int argc, char const *argv[])
 		for (int j=0; j<GRID_ALLOCSIZE_LEN; j++){
 			float freePercentage = 1;
 			int Nthreads = GRID_NTHREADS[i];
-			nPages = ceil((float)GRID_ALLOCSIZE[j]/PAGE_SIZE_DEFAULT);
+			int allocation_size = GRID_ALLOCSIZE[j];
 			Metrics_t *metrics_array = (Metrics_t*)malloc(N_SAMPLES*sizeof(Metrics_t));	// array of metrics samples
 			for (int k=0; k<N_SAMPLES; k++){
 				resetMemoryManager();
-				metrics_array[k] = measureMetrics(Nthreads, freePercentage, nPages);
+				metrics_array[k] = measureMetrics(Nthreads, freePercentage, allocation_size);
 			}
 			Metrics_t average_metrics = sample_average(metrics_array, N_SAMPLES);
 			// print results
-			std::cout << Nthreads << "," << GRID_ALLOCSIZE[j] << "," << average_metrics.avgStep << "," << average_metrics.avgMaxWarp << "," << average_metrics.runTime << std::endl;
+			std::cout << Nthreads << "," << allocation_size << "," << average_metrics.avgStep << "," << average_metrics.avgMaxWarp << "," << average_metrics.runTime << std::endl;
 			std::cout.flush();
 		}
 	}
