@@ -18,6 +18,7 @@ extern __device__ int getPage(int *step_count=0);
 extern __device__ void freePage(int pageID);
 extern __host__ float getFreePagePercentage();
 extern __host__ void resetMemoryManager();          // free all pages and reset meta data
+extern __host__ void prefillBuffer(float freePercentage); // prefill the buffer so that it only has freePercentage % of free page. freePercentage is in [0,1]
 
 
 
@@ -105,6 +106,23 @@ __host__ float getFreePagePercentage(){
     return (float)(h_total_n_pages-h_sum)/h_total_n_pages;
 }
 
+__global__ void get1page_kernel(int Nthreads){
+	int tid = blockIdx.x*blockDim.x + threadIdx.x;
+	if (tid<Nthreads)
+		int pageID = getPage(nullptr);
+}
+
+__host__ void prefillBuffer(float freePercentage){
+    int nRequests = (1-freePercentage)*h_total_n_pages;
+	if (nRequests==0) return;
+	// std::cerr << "number of pages requested to fill buffer: " << nRequests << std::endl;
+	// std::cerr << "filling buffer ...  " << std::endl;
+	// std::cerr.flush();
+	get1page_kernel <<< ceil((float)nRequests/1024), 1024 >>> (nRequests);
+	gpuErrchk( cudaPeekAtLastError() );
+	gpuErrchk( cudaDeviceSynchronize() );
+	// std::cerr << "free page percentage: " << 100*getFreePagePercentage() << std::endl;
+}
 
 
 #endif

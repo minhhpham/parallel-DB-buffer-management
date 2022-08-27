@@ -4,7 +4,7 @@
 	change source file on the first include file to change strategy. No other step is needed
  */
 
-#include "../source/CollabRW_BM.cuh"
+#include "../source/CRW_BM.cuh"
 #include "metrics.h"
 #include <iostream>
 
@@ -49,7 +49,7 @@ void fillMemory(float freePercentage){
  */
 Metrics_t measureMetrics(int Nthreads, float freePercentage){
 	// run kernel until get to desired free percentage
-	fillMemory(freePercentage);
+	prefillBuffer(freePercentage);
 
 	// allocate metrics array on host
 	int *h_step_counts = (int*)malloc((1<<20)*sizeof(int));
