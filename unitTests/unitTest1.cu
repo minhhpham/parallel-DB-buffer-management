@@ -4,14 +4,14 @@
 	change source file on the first include file to change strategy. No other step is needed
  */
 
-#include "../source/CRW_BM.cuh"
+#include "../source/Ouroboros.cuh"
 #include "metrics.h"
 #include <iostream>
 
 // define grid
 #define GRID_NTHREADS_LEN 2
 #define GRID_FREEPERC_LEN 5
-#define N_SAMPLES 30		// number of samples to measure metrics
+#define N_SAMPLES 1		// number of samples to measure metrics
 int GRID_NTHREADS[GRID_NTHREADS_LEN] = {10000, 100000};
 float GRID_FREEPERC[GRID_FREEPERC_LEN] = {0.9, 0.8, 0.7, 0.6, 0.1};
 
@@ -22,7 +22,7 @@ __global__ void get1page_kernel(int Nthreads, int *d_step_counts){
 	if (tid<Nthreads){
 		int step_counts;
 		int *tmp = d_step_counts? &step_counts : 0;
-		int pageID = getPage(tmp);
+		void* pageID = getPage();
 		if (d_step_counts) d_step_counts[tid] = step_counts;
 	}
 }
@@ -93,7 +93,7 @@ int main(int argc, char const *argv[])
 			int Nthreads = GRID_NTHREADS[j];
 			Metrics_t *metrics_array = (Metrics_t*)malloc(N_SAMPLES*sizeof(Metrics_t));	// array of metrics samples
 			for (int k=0; k<N_SAMPLES; k++){
-				resetMemoryManager();
+				// resetMemoryManager();
 				metrics_array[k] = measureMetrics(Nthreads, freePercentage);
 			}
 			Metrics_t average_metrics = sample_average(metrics_array, N_SAMPLES);

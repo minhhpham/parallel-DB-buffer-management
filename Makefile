@@ -1,7 +1,7 @@
 MAKEFLAGS+= -j9
 NVCC=		nvcc
-NVCC_OPTIM_FLAGS= --device-c -arch=sm_70 -rdc=true -lcudadevrt --ptxas-options=-v
-NVCC_DEBUG_FLAGS= -g -G -O0 --device-c -arch=sm_70
+NVCC_OPTIM_FLAGS= --expt-relaxed-constexpr --device-c -arch=sm_70 -rdc=true -lcudadevrt --ptxas-options=-v
+NVCC_DEBUG_FLAGS= --expt-relaxed-constexpr -g -G -O0 --device-c -arch=sm_70
 BINDIR= 	bin
 SOURCEDIR=	source
 TESTDIR=	unitTests
@@ -11,10 +11,10 @@ BINLIST=$(addprefix $(BINDIR)/, $(PROG))
 
 ifeq ($(debug), 1)
 	NVCC_FLAGS = $(NVCC_DEBUG_FLAGS)
-	NVCC_LINK_FLAG = -arch=sm_70 -O0 -g -G -lcudadevrt --ptxas-options=-v --compiler-options -Wall
+	NVCC_LINK_FLAG = --expt-relaxed-constexpr -arch=sm_70 -O0 -g -G -lcudadevrt --ptxas-options=-v --compiler-options -Wall
 else
 	NVCC_FLAGS = $(NVCC_OPTIM_FLAGS)
-	NVCC_LINK_FLAG = -arch=sm_70 -O4 -lcudadevrt --ptxas-options=-v --compiler-options -Wall
+	NVCC_LINK_FLAG = --expt-relaxed-constexpr -arch=sm_70 -O4 -lcudadevrt --ptxas-options=-v --compiler-options -Wall
 endif
 
 all: $(BINDIR) $(BINLIST)
@@ -155,4 +155,4 @@ collectPageData: parallelPage.o collectPageData.o
 clean:
 	rm -f bin/*
 debug:
-	make clean && make -j10 debug=1 && CUDA_VISIBLE_DEVICES=0 cuda-gdb bin/unitTest1.5
+	make clean && make -j10 debug=1 && CUDA_VISIBLE_DEVICES=0 cuda-gdb bin/unitTest1
