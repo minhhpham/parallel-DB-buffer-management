@@ -6,7 +6,7 @@ using namespace std;
 
 #define NTHREADS 10000
 #define NITERATIONS 100
-#define NSAMPLES 30
+#define NSAMPLES 1
 
 typedef struct PageData_t
 {
@@ -63,7 +63,7 @@ vector<PageData_t> collect_one_sample(int sampleId){
 
 int main(int argc, char const *argv[])
 {
-    initMemoryManagement();
+    initMemoryManagement(1, 1024);
 
     fprintf(stdout, "threadId,pageId,iteration,sampleId\n");
     for (int sampleId=0; sampleId<NSAMPLES; sampleId++){

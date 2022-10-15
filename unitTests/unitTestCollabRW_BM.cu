@@ -1,4 +1,4 @@
-#include "parallelPage.cuh"
+#include "../source/parallelPage.cuh"
 #include "metrics.h"
 
 static __device__ void fillPage(void *page){

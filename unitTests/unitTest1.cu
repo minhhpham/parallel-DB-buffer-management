@@ -4,16 +4,18 @@
 	change source file on the first include file to change strategy. No other step is needed
  */
 
-#include "../source/Ouroboros.cuh"
+#include "../source/CollabRW_BM.cuh"
 #include "metrics.h"
 #include <iostream>
+#include <iostream>
+using namespace std;
 
 // define grid
-#define GRID_NTHREADS_LEN 2
+#define GRID_NTHREADS_LEN 1
 #define GRID_FREEPERC_LEN 5
 #define N_SAMPLES 1		// number of samples to measure metrics
-int GRID_NTHREADS[GRID_NTHREADS_LEN] = {10000, 100000};
-float GRID_FREEPERC[GRID_FREEPERC_LEN] = {0.9, 0.8, 0.7, 0.6, 0.1};
+int GRID_NTHREADS[GRID_NTHREADS_LEN] = {5000};
+float GRID_FREEPERC[GRID_FREEPERC_LEN] = {0.5, 0.3, 0.2, 0.1, 0.08};
 
 
 /* Kernel to get 1 page with Random Walk, record step counts */
@@ -22,7 +24,7 @@ __global__ void get1page_kernel(int Nthreads, int *d_step_counts){
 	if (tid<Nthreads){
 		int step_counts;
 		int *tmp = d_step_counts? &step_counts : 0;
-		void* pageID = getPage();
+		auto pageID = getPage();
 		if (d_step_counts) d_step_counts[tid] = step_counts;
 	}
 }
@@ -83,7 +85,7 @@ int main(int argc, char const *argv[])
 
 	/* initialize system */
 	fprintf(stderr, "initializing memory management system ... \n");
-	initMemoryManagement();
+	initMemoryManagement(2, 2147);
 
 	/* run getpage on a grid (NThreads, freePercentage) and get metrics */
 	std::cout << "T,N,A%%,Average_steps,Average_Max_Warp,Time(ms)" << std::endl;
@@ -93,7 +95,7 @@ int main(int argc, char const *argv[])
 			int Nthreads = GRID_NTHREADS[j];
 			Metrics_t *metrics_array = (Metrics_t*)malloc(N_SAMPLES*sizeof(Metrics_t));	// array of metrics samples
 			for (int k=0; k<N_SAMPLES; k++){
-				// resetMemoryManager();
+				resetMemoryManager();
 				metrics_array[k] = measureMetrics(Nthreads, freePercentage);
 			}
 			Metrics_t average_metrics = sample_average(metrics_array, N_SAMPLES);

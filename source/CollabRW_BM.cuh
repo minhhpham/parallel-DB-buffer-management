@@ -111,9 +111,8 @@ static inline __device__ int fks(int x, int k){
 		shuffle sync to get pageID from sourceLaneID
 */
 __device__ int getPage(int *stepCount){
-	int tid = blockIdx.x*blockDim.x + threadIdx.x;
 	int16_t Clock = (int16_t)clock();
-	int seed = (tid<<15) + Clock;
+	int seed = (blockIdx.x<<15) + Clock;
 	// randomize pages and try to grab a page
 	int step_count = 0;
 	unsigned mask = __activemask();
@@ -123,7 +122,7 @@ __device__ int getPage(int *stepCount){
 	while (needMask){
 		step_count++;
 		seed = RNG_LCG(seed);
-		unsigned p = (unsigned)seed % Bitmap_length_d; // groupID
+		unsigned p = (unsigned)(seed + threadIdx.x) % Bitmap_length_d; // groupID
 		int r = atomicExch(&d_PageMapRandomWalk_BM[p], 0xFFFFFFFF);
 		r = ~r;
 		int hasMask = __ballot_sync(mask, r!=0);
@@ -134,14 +133,16 @@ __device__ int getPage(int *stepCount){
 			int pageID = __shfl_sync(mask, foundPageID, sourceLaneID);
 			if (pageID_out==-1 && sourceLaneID!=-1)
 				pageID_out = pageID;
+			// update pages this thread has, if a page has been taken from it
+			if ( r!=0 && __popc( ~(0xFFFFFFFF<<laneID) & hasMask ) <  __popc(needMask) )
+				r &= ~(1<<(__ffs(r)-1)) ;
 			// update needmask and hasmask
-			r &= ~(1<<(__ffs(r)-1)) ;
 			hasMask = __ballot_sync(mask, r!=0);
 			needMask = __ballot_sync(mask, pageID_out==-1);
 		}
 		// release page we're still holding
 		if (needMask==0 && r)
-			releasePagesBase(p, __ffs(r)-1, __popc(r));
+			atomicExch(&d_PageMapRandomWalk_BM[p], ~r);
 	}
 	if (stepCount) *stepCount = step_count;
 	return pageID_out;
@@ -203,10 +204,11 @@ __host__ void prefillBuffer(float freePercentage){
 	// std::cerr << "number of pages requested to fill buffer: " << nRequests << std::endl;
 	// std::cerr << "filling buffer ...  " << std::endl;
 	// std::cerr.flush();
-	get1page_kernel <<< ceil((float)nRequests/1024), 1024 >>> (nRequests);
+	get1page_kernel <<< ceil((float)nRequests/32), 32 >>> (nRequests);
 	gpuErrchk( cudaPeekAtLastError() );
 	gpuErrchk( cudaDeviceSynchronize() );
-	// std::cerr << "free page percentage: " << 100*getFreePagePercentage() << std::endl;
+	auto free_perc = getFreePagePercentage();
+	// std::cerr << "free page percentage: " << (int)(free_perc * h_total_n_pages) << "/" << h_total_n_pages << " = " << 100*getFreePagePercentage() << std::endl;
 }
 
 
