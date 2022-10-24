@@ -150,10 +150,10 @@ __host__ void prefillBuffer(float freePercentage){
 	// std::cerr << "number of pages requested to fill buffer: " << nRequests << std::endl;
 	// std::cerr << "filling buffer ...  " << std::endl;
 	// std::cerr.flush();
-	get1page_kernel <<< ceil((float)nRequests/1024), 1024 >>> (nRequests);
+	get1page_kernel <<< ceil((float)nRequests/32), 32 >>> (nRequests);
 	gpuErrchk( cudaPeekAtLastError() );
 	gpuErrchk( cudaDeviceSynchronize() );
-	// std::cerr << "free page percentage: " << 100*getFreePagePercentage() << std::endl;
+	std::cerr << "free page percentage: " << 100*getFreePagePercentage() << std::endl;
 }
 
 

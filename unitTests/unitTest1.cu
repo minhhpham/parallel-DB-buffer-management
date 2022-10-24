@@ -15,7 +15,7 @@ using namespace std;
 #define GRID_FREEPERC_LEN 5
 #define N_SAMPLES 1		// number of samples to measure metrics
 int GRID_NTHREADS[GRID_NTHREADS_LEN] = {5000};
-float GRID_FREEPERC[GRID_FREEPERC_LEN] = {0.5, 0.3, 0.2, 0.1, 0.08};
+float GRID_FREEPERC[GRID_FREEPERC_LEN] = {0.5, 0.1, 0.01, 0.008, 0.005};
 
 
 /* Kernel to get 1 page with Random Walk, record step counts */
@@ -23,8 +23,8 @@ __global__ void get1page_kernel(int Nthreads, int *d_step_counts){
 	int tid = blockIdx.x*blockDim.x + threadIdx.x;
 	if (tid<Nthreads){
 		int step_counts;
-		int *tmp = d_step_counts? &step_counts : 0;
-		auto pageID = getPage();
+		int *step_counts_ptr = d_step_counts ? &step_counts : 0;
+		auto pageID = getPage(step_counts_ptr);
 		if (d_step_counts) d_step_counts[tid] = step_counts;
 	}
 }
@@ -33,13 +33,13 @@ __global__ void get1page_kernel(int Nthreads, int *d_step_counts){
 void fillMemory(float freePercentage){
 	int nRequests = (1-freePercentage)*TOTAL_N_PAGES_DEFAULT;
 	if (nRequests==0) return;
-	// std::cerr << "number of pages requested to fill buffer: " << nRequests << std::endl;
+	std::cerr << "number of pages requested to fill buffer: " << nRequests << std::endl;
 	// std::cerr << "filling buffer ...  " << std::endl;
 	std::cerr.flush();
 	get1page_kernel <<< ceil((float)nRequests/1024), 1024 >>> (nRequests, 0);
 	gpuErrchk( cudaPeekAtLastError() );
 	gpuErrchk( cudaDeviceSynchronize() );
-	// std::cerr << "free page percentage: " << 100*getFreePagePercentage() << std::endl;
+	std::cerr << "free page percentage: " << 100*getFreePagePercentage() << std::endl;
 }
 
 

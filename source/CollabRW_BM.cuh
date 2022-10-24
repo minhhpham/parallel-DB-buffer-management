@@ -208,7 +208,7 @@ __host__ void prefillBuffer(float freePercentage){
 	gpuErrchk( cudaPeekAtLastError() );
 	gpuErrchk( cudaDeviceSynchronize() );
 	auto free_perc = getFreePagePercentage();
-	// std::cerr << "free page percentage: " << (int)(free_perc * h_total_n_pages) << "/" << h_total_n_pages << " = " << 100*getFreePagePercentage() << std::endl;
+	std::cerr << "free page percentage: " << (int)(free_perc * h_total_n_pages) << "/" << h_total_n_pages << " = " << 100*getFreePagePercentage() << std::endl;
 }
 
 
