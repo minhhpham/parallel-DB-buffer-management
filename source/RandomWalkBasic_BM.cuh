@@ -43,7 +43,7 @@ __host__ void initMemoryManagement(int nGB, int pageSize){
     initPages(nGB, pageSize);
     // initialize metadata (page map)
         // bitmap length
-    Bitmap_length = h_total_n_pages/sizeof(int);
+    Bitmap_length = h_total_n_pages/sizeof(int)/8;
     gpuErrchk( cudaMemcpyToSymbol(Bitmap_length_d, &Bitmap_length, sizeof(int)) );
         // bitmap
     gpuErrchk( cudaMalloc((void**)&d_PageMapRandomWalk_BM_h, Bitmap_length*sizeof(int)) );

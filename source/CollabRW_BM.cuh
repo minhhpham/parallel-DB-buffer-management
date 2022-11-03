@@ -13,7 +13,7 @@
 /* ---------------------- declaration and usage ----------------------------------------------------------------- */
 extern __device__ void *pageAddress(int pageID);    // return pointer to start of a page given pageID
 __host__ void initMemoryManagement(int nGB=TOTAL_SIZE_GB_DEFAULT, int pageSize=PAGE_SIZE_DEFAULT);    // initialize the memory management system
-extern __device__ int getPage(int *step_count=0);
+extern __device__ int getPage(int *step_count=0, bool collectWarpData=false);
 extern __device__ void freePage(int pageID);
 extern __host__ float getFreePagePercentage();
 extern __host__ void resetMemoryManager();          // free all pages and reset meta data
@@ -110,7 +110,7 @@ static inline __device__ int fks(int x, int k){
 			( need to do O(32) ffs )
 		shuffle sync to get pageID from sourceLaneID
 */
-__device__ int getPage(int *stepCount){
+__device__ int getPage(int *stepCount, bool collectWarpData){
 	int16_t Clock = (int16_t)clock();
 	int seed = (blockIdx.x<<15) + Clock;
 	// randomize pages and try to grab a page
@@ -126,6 +126,16 @@ __device__ int getPage(int *stepCount){
 		int r = atomicExch(&d_PageMapRandomWalk_BM[p], 0xFFFFFFFF);
 		r = ~r;
 		int hasMask = __ballot_sync(mask, r!=0);
+
+		if (collectWarpData){
+			int nPagesFound = __popc(r);
+			int Sum = 0;
+			for (int tid = 0; tid<32; tid++)
+				Sum += __shfl_sync(mask, nPagesFound, tid);
+			if (threadIdx.x==0)
+				printf("%d\n", Sum);
+		}
+		
 		while (needMask && hasMask){
 			int s = __popc( ~(0xFFFFFFFF<<laneID) & needMask );
 			int sourceLaneID = fks(hasMask, s+1)-1;

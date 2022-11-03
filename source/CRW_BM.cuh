@@ -47,7 +47,7 @@ __host__ void initMemoryManagement(int nGB, int pageSize){
     initPages(nGB, pageSize);
     // initialize metadata (page map)
         // bitmap length
-    Bitmap_length = h_total_n_pages/sizeof(int);
+    Bitmap_length = h_total_n_pages/sizeof(int)/8;
     gpuErrchk( cudaMemcpyToSymbol(Bitmap_length_d, &Bitmap_length, sizeof(int)) );
         // bitmap
     gpuErrchk( cudaMalloc((void**)&d_PageMapRandomWalk_BM_h, Bitmap_length*sizeof(int)) );
@@ -77,41 +77,47 @@ __device__ int getPage(int *stepCount){
         printf("KERNEL RUNNING MORE THREADS THAN CRW can support");
         __trap();
     }
+
+    int step_count = 0;
+
     {
         int groupID = d_LastFreeGroup[tid];
         int8_t bit = d_LastFreeBit[tid];
         if (groupID != -1){
-            if (groupID==(sizeof(int)-1)){
-                groupID += 1;
+            if (bit==(32-1)){
                 bit = 0;
+                groupID += 1;
                 if (groupID==(Bitmap_length_d-1)) groupID = 0;
             }
             else bit++;
-            int groupState = d_PageMapRandomWalk_BM[groupID];
-            if (groupState != 0xFFFFFFFF) bit = __ffs(~groupState)-1;
-            int mask = 1<<bit;
-            int res = atomicOr(&d_PageMapRandomWalk_BM[groupID], mask);
-            if ((res & mask)==0){
-                d_LastFreeGroup[tid] = groupID;
-                d_LastFreeBit[tid] = bit;
-                if (stepCount) *stepCount = 1;
-                return groupID*32 + bit;
+            while (d_PageMapRandomWalk_BM[groupID] != 0xFFFFFFFF){
+                step_count++;
+                bit = __ffs(~d_PageMapRandomWalk_BM[groupID])-1;
+                int mask = 1<<bit;
+                int res = atomicOr(&d_PageMapRandomWalk_BM[groupID], mask);
+                if ((res & mask)==0){
+                    d_LastFreeGroup[tid] = groupID;
+                    d_LastFreeBit[tid] = bit;
+                    if (stepCount) *stepCount = step_count;
+                    return groupID*32 + bit;
+                }
             }
         }
     }
 
     // simple RW
     // randomize pages and try to grab a page
-    int step_count = 1;
+    
     int16_t Clock = (int16_t)clock();
     int seed = (tid<<15) + Clock;
     int pageID=-1;
     while(pageID==-1){
-        step_count++;
+        // step_count++;
         // perform random jump
         seed = RNG_LCG(seed);
         unsigned groupID = (unsigned)seed % Bitmap_length_d;
         while (d_PageMapRandomWalk_BM[groupID]!=0xFFFFFFFF){
+            step_count++;
             int groupValue = d_PageMapRandomWalk_BM[groupID];
             // try to flip one of the 0-bit to 1
             int bitPosition = __ffs(~groupValue) - 1;
@@ -151,7 +157,6 @@ __global__ void popc_kernel(int *d_output){
     int i = blockIdx.x*blockDim.x + threadIdx.x;
     if (i>=Bitmap_length_d) return;
     d_output[i] = __popc(d_PageMapRandomWalk_BM[i]);
-
 }
 
 __host__ float getFreePagePercentage(){
@@ -201,7 +206,8 @@ __host__ void prefillBuffer(float freePercentage){
 	get1page_kernel <<< ceil((float)nRequests/1024), 1024 >>> (nRequests);
 	gpuErrchk( cudaPeekAtLastError() );
 	gpuErrchk( cudaDeviceSynchronize() );
-	// std::cerr << "free page percentage: " << 100*getFreePagePercentage() << std::endl;
+	auto free_perc = getFreePagePercentage();
+	// std::cerr << "free page percentage: " << (int)(free_perc * h_total_n_pages) << "/" << h_total_n_pages << " = " << 100*getFreePagePercentage() << std::endl;
 }
 
 #endif
