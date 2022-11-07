@@ -6,7 +6,7 @@ BINDIR= 	bin
 SOURCEDIR=	source
 TESTDIR=	unitTests
 
-PROG=memoryInitTest unitTest1 unitTest1.5 unitTest2 unitTest3 unitTest4 collectPageData
+PROG=memoryInitTest unitTest1 unitTest1.5 unitTest2 unitTest3 unitTest4 unitTest5 unitTest6 collectPageData
 BINLIST=$(addprefix $(BINDIR)/, $(PROG))
 
 ifeq ($(debug), 1)
@@ -22,7 +22,7 @@ all: $(BINDIR) $(BINLIST)
 $(BINDIR):
 	mkdir $(BINDIR)
 
-$(BINDIR)/%:  $(TESTDIR)/%.cu $(SOURCEDIR)/Paging.cuh
+$(BINDIR)/%:  $(TESTDIR)/%.cu $(SOURCEDIR)/Paging.cuh $(SOURCEDIR)/RandomWalkBasic.cuh $(SOURCEDIR)/RandomWalkBasic_BM.cuh $(SOURCEDIR)/CRW_BM.cuh $(SOURCEDIR)/CollabRW_BM.cuh
 	$(NVCC) $< -o $@ $(NVCC_LINK_FLAG)
 
 

@@ -4,9 +4,8 @@
 #include <vector>
 using namespace std;
 
-#define NTHREADS 10000
-#define NITERATIONS 100
-#define NSAMPLES 1
+#define NTHREADS 32
+#define NSAMPLES 10000
 
 typedef struct PageData_t
 {
@@ -17,44 +16,28 @@ typedef struct PageData_t
 } PageData_t;
 
 
-__global__ void get1page_kernel(int Nthreads, int *pageIds, int *d_step_counts){
+__global__ void get1page_kernel(int Nthreads, int *pageIds, int *d_step_counts, bool collectWarpData=false){
 	int tid = blockIdx.x*blockDim.x + threadIdx.x;
 	if (tid<Nthreads){
 		int step_counts;
 		int *tmp = d_step_counts? &step_counts : 0;
-		int pageID = getPage(tmp);
+		int pageID = getPage(tmp, collectWarpData);
 		if (d_step_counts) d_step_counts[tid] = step_counts;
         pageIds[tid] = pageID;
 	}
 }
 
 
-vector<PageData_t> collect_one_sample(int sampleId){
-    vector<PageData_t> out;
+void collect_one_sample(int sampleId){
     int *d_pageIds;   // array of pageIds from kernel execution
     gpuErrchk( cudaMalloc(&d_pageIds, NTHREADS*sizeof(int)) );
-    int *h_pageIds = (int*)malloc(NTHREADS*sizeof(int));
-    resetMemoryManager();
 
-    for (int i=0; i<NITERATIONS; i++){
-        get1page_kernel <<< ceil((float)NTHREADS/32), 32 >>> (NTHREADS, d_pageIds, nullptr);
-        gpuErrchk( cudaPeekAtLastError() );
-	    gpuErrchk( cudaDeviceSynchronize() );
-        cudaMemcpy(h_pageIds, d_pageIds, NTHREADS*sizeof(int), cudaMemcpyDeviceToHost);
-        for (int tid=0; tid<NTHREADS; tid++){
-            out.push_back({
-                .threadId = tid,
-                .pageId = h_pageIds[tid],
-                .iteration = i,
-                .sample = sampleId
-            });
-            h_pageIds[tid] = {};
-        }
-    }
+    get1page_kernel <<< ceil((float)NTHREADS/32), 32 >>> (NTHREADS, d_pageIds, nullptr, true);
+    gpuErrchk( cudaPeekAtLastError() );
+    gpuErrchk( cudaDeviceSynchronize() );
+
 
     cudaFree(d_pageIds);
-    free(h_pageIds);
-    return out;
 }
 
 
@@ -63,13 +46,12 @@ vector<PageData_t> collect_one_sample(int sampleId){
 
 int main(int argc, char const *argv[])
 {
-    initMemoryManagement(1, 1024);
+    initMemoryManagement(2, 2147);
 
-    fprintf(stdout, "threadId,pageId,iteration,sampleId\n");
     for (int sampleId=0; sampleId<NSAMPLES; sampleId++){
-        auto sample = collect_one_sample(sampleId);
-        for (auto point:sample)
-            fprintf(stdout, "%d,%d,%d,%d\n", point.threadId, point.pageId, point.iteration, sampleId);
+        resetMemoryManager();
+        prefillBuffer(0.1);
+        collect_one_sample(sampleId);
     }
 
     return 0;

@@ -1,5 +1,5 @@
 /* 
-	perform one-page allocation, collect TAS, WAS, time
+	perform one-page allocation on only thread 0 of each warp, collect TAS, WAS, time
 	on a grid of Number of threads (N), percentage of available pages (A/T)
 	change source file on the first include file to change strategy. No other step is needed
  */
@@ -17,16 +17,20 @@ using namespace std;
 int GRID_NTHREADS[GRID_NTHREADS_LEN] = {5000};
 float GRID_FREEPERC[GRID_FREEPERC_LEN] = {0.5, 0.495, 0.49, 0.485, 0.48, 0.475, 0.47, 0.465, 0.46, 0.455, 0.45, 0.445, 0.44, 0.435, 0.43, 0.425, 0.42, 0.415, 0.41, 0.405, 0.4, 0.395, 0.39, 0.385, 0.38, 0.375, 0.37, 0.365, 0.36, 0.355, 0.35, 0.345, 0.34, 0.335, 0.33, 0.325, 0.32, 0.315, 0.31, 0.305, 0.3, 0.295, 0.29, 0.285, 0.28, 0.275, 0.27, 0.265, 0.26, 0.255, 0.25, 0.245, 0.24, 0.235, 0.23, 0.225, 0.22, 0.215, 0.21, 0.205, 0.2, 0.195, 0.19, 0.185, 0.18, 0.175, 0.17, 0.165, 0.16, 0.155, 0.15, 0.145, 0.14, 0.135, 0.13, 0.125, 0.12, 0.115, 0.11, 0.105, 0.1, 0.095, 0.09, 0.085, 0.08, 0.075, 0.07, 0.065, 0.06, 0.055, 0.05, 0.045, 0.04, 0.035, 0.03, 0.025, 0.02, 0.015, 0.01, 0.005};
 
-
-/* Kernel to get 1 page with Random Walk, record step counts */
+/* Kernel to get 1 page with Random Walk, record step counts 
+  only lane 0 of a warp gets a page
+ */
 __global__ void get1page_kernel(int Nthreads, int *d_step_counts){
 	int tid = blockIdx.x*blockDim.x + threadIdx.x;
-	if (tid<Nthreads){
-		int step_counts;
-		int *step_counts_ptr = d_step_counts ? &step_counts : 0;
+    int step_counts;
+	if (tid<Nthreads && (threadIdx.x%32==0)){
+		int *step_counts_ptr = d_step_counts ? &step_counts : nullptr;
 		auto pageID = getPage(step_counts_ptr);
-		if (d_step_counts) d_step_counts[tid] = step_counts;
 	}
+    // copy step_counts from lane 0 to all lanes so that we have the correct stats later.
+    __syncwarp();
+    step_counts = __shfl_sync(__activemask(), step_counts, 0);
+    if (d_step_counts) d_step_counts[tid] = step_counts;
 }
 
 /* make page requests until memory manager has exactly freePercentage */
