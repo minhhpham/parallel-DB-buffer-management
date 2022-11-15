@@ -6,7 +6,7 @@ BINDIR= 	bin
 SOURCEDIR=	source
 TESTDIR=	unitTests
 
-PROG=memoryInitTest unitTest1 unitTest1.5 unitTest2 unitTest3 unitTest4 unitTest5 unitTest6 collectPageData
+PROG=memoryInitTest unitTest1 unitTest1.5 unitTest2 unitTest3 unitTest4 unitTest5 unitTest6 unitTest7 collectPageData
 BINLIST=$(addprefix $(BINDIR)/, $(PROG))
 
 ifeq ($(debug), 1)

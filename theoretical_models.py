@@ -1,8 +1,9 @@
 from math import log as ln
 from math import sqrt, pi, exp
-from scipy import integrate
-import numpy as np
-
+# from scipy import integrate
+# import numpy as np
+import mpmath
+mpmath.mp.dps = 100
 
 EPSILON = 10**-9
 INFINITY = 10**7
@@ -53,10 +54,9 @@ def RWBM_WAS(T, A, N):
 def CoRWBM_WAS(T, A, N):
     mu = 1024 * (A-N) / T
     sigma = 1024 * (A-N)/T * (T-A+N)/T
-    EB = integrate.quad(
+    EB = mpmath.quad(
         lambda t: 32 / (sigma * sqrt(2*pi*t)) *
         exp(-(32-mu*t)**2 / (2*(sigma**2)*t)),
-        0,
-        np.inf
-    )[0]
+        [0, mpmath.inf]
+    )
     return max(1, EB)
