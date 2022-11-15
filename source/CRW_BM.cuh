@@ -14,6 +14,7 @@
 extern __device__ void *pageAddress(int pageID);    // return pointer to start of a page given pageID
 extern __host__ void initMemoryManagement(int nGB=TOTAL_SIZE_GB_DEFAULT, int pageSize=PAGE_SIZE_DEFAULT);    // initialize the memory management system
 extern __device__ int getPage(int *step_count=0);
+extern __device__ void* getPagePtr();   // same as getpage but return ptr to start of page
 extern __device__ void freePage(int pageID);
 extern __host__ float getFreePagePercentage();
 extern __host__ void resetMemoryManager();          // free all pages and reset meta data
@@ -139,6 +140,13 @@ __device__ int getPage(int *stepCount){
     return pageID;
 
 }
+
+
+extern __device__ void* getPagePtr(){
+    int pageId = getPage();
+    return pageAddress(pageId);
+}
+
 
 
 __device__ void freePage(int pageID){
